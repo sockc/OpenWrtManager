@@ -7,6 +7,7 @@ import com.openwrtmanager.mobile.agent.AgentClient
 import com.openwrtmanager.mobile.data.SecureStore
 import com.openwrtmanager.mobile.model.*
 import com.openwrtmanager.mobile.ssh.SshManager
+import com.openwrtmanager.mobile.update.UpdateChecker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,7 +44,18 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _terminalOutput = MutableStateFlow("")
     val terminalOutput: StateFlow<String> = _terminalOutput.asStateFlow()
 
+    private val _latestRelease = MutableStateFlow<ReleaseInfo?>(null)
+    val latestRelease: StateFlow<ReleaseInfo?> = _latestRelease.asStateFlow()
+    private val _updateAvailable = MutableStateFlow(false)
+    val updateAvailable: StateFlow<Boolean> = _updateAvailable.asStateFlow()
+    private val _updateChecking = MutableStateFlow(false)
+    val updateChecking: StateFlow<Boolean> = _updateChecking.asStateFlow()
+
     val savedProfile: RouterProfile? get() = store.loadProfile()
+
+    init {
+        checkUpdates()
+    }
 
     fun connect(profile: RouterProfile) = viewModelScope.launch {
         task {
@@ -54,7 +66,6 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             val installedVersion = agent.agentVersion()
             _agentInstalled.value = installedVersion != null
             if (_agentInstalled.value) {
-                // Keep the tiny router-side agent in sync with the APK.
                 if (installedVersion != AgentClient.BUNDLED_AGENT_VERSION) {
                     agent.installAgent()
                 }
@@ -67,6 +78,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ssh.disconnect()
         _connected.value = false
         _status.value = null
+        _network.value = null
+        _wifi.value = emptyList()
+        _devices.value = emptyList()
     }
 
     fun installAgent() = viewModelScope.launch {
@@ -77,11 +91,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refreshHome() = viewModelScope.launch { task { _status.value = agent.status() } }
+    fun refreshHome() = viewModelScope.launch {
+        task {
+            _status.value = agent.status()
+            _network.value = agent.network()
+            _wifi.value = agent.wifi()
+            _devices.value = agent.devices()
+        }
+    }
+
     fun refreshDevices() = viewModelScope.launch { task { _devices.value = agent.devices() } }
     fun refreshNetwork() = viewModelScope.launch { task { _network.value = agent.network(); _wifi.value = agent.wifi() } }
     fun refreshServices() = viewModelScope.launch { task { _services.value = agent.services() } }
-    fun refreshLogs() = viewModelScope.launch { task { _logs.value = agent.logs() } }
+    fun refreshLogs() = viewModelScope.launch { task { _logs.value = sanitize(agent.logs()) } }
+
+    fun checkUpdates() = viewModelScope.launch {
+        _updateChecking.value = true
+        runCatching { UpdateChecker.check() }
+            .onSuccess { release ->
+                _latestRelease.value = release
+                _updateAvailable.value = release?.let { UpdateChecker.isNewer(it.versionName) } == true
+            }
+        _updateChecking.value = false
+    }
 
     fun setBlocked(device: DeviceInfo, blocked: Boolean) = viewModelScope.launch {
         task { agent.setBlocked(device.mac, blocked); _devices.value = agent.devices() }
@@ -104,7 +136,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun terminal(command: String) = viewModelScope.launch {
         if (command.isBlank()) return@launch
         task {
-            val result = agent.raw(command)
+            val result = sanitize(agent.raw(command))
             _terminalOutput.value += "\n$ $command\n$result\n"
         }
     }
@@ -115,13 +147,29 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _status.value = agent.status()
         _devices.value = agent.devices()
         _network.value = agent.network()
+        _wifi.value = agent.wifi()
     }
 
     private suspend fun task(block: suspend () -> Unit) {
         _busy.value = true
         _error.value = null
-        try { block() } catch (t: Throwable) { _error.value = t.message ?: t.javaClass.simpleName }
-        finally { _busy.value = false }
+        try {
+            block()
+        } catch (t: Throwable) {
+            _error.value = t.message ?: t.javaClass.simpleName
+        } finally {
+            _busy.value = false
+        }
+    }
+
+    private fun sanitize(text: String): String {
+        return text.lineSequence().joinToString("\n") { line ->
+            when {
+                Regex("(?i)(password|passwd|token|secret|api[_-]?key|private[_-]?key)").containsMatchIn(line) ->
+                    line.replace(Regex("([:=])[ ]*[^, ]+"), "$1 ***")
+                else -> line
+            }
+        }
     }
 
     override fun onCleared() {
