@@ -15,6 +15,7 @@ data class SystemStatus(
     val arch: String = "",
     val uptimeSeconds: Long = 0,
     val load1: Double = 0.0,
+    val cpuPercent: Int = 0,
     val memTotalKb: Long = 0,
     val memAvailableKb: Long = 0,
     val rootTotalKb: Long = 0,
@@ -29,7 +30,9 @@ data class DeviceInfo(
     val interfaceName: String,
     val state: String,
     val connectionType: String,
-    val blocked: Boolean
+    val blocked: Boolean,
+    val band: String = "",
+    val signalDbm: Int? = null
 )
 
 data class NetworkSummary(
@@ -38,6 +41,9 @@ data class NetworkSummary(
     val wanIpv4: String = "",
     val wanIpv6: String = "",
     val wanUptime: Long = 0,
+    val wanUp: Boolean = false,
+    val wanGateway: String = "",
+    val wanDns: List<String> = emptyList(),
     val lanDevice: String = "",
     val lanIpv4: String = "",
     val lanIpv6: String = ""
@@ -47,16 +53,26 @@ data class WifiNetwork(
     val section: String,
     val kind: String,
     val device: String = "",
+    val ifname: String = "",
     val ssid: String = "",
     val encryption: String = "",
     val channel: String = "",
     val band: String = "",
     val htmode: String = "",
-    val disabled: Boolean = false
+    val disabled: Boolean = false,
+    val clientCount: Int = 0
 )
 
 data class ServiceInfo(
     val name: String,
     val enabled: Boolean,
     val running: Boolean
+)
+
+data class ReleaseInfo(
+    val tagName: String,
+    val versionName: String,
+    val body: String,
+    val apkUrl: String,
+    val htmlUrl: String
 )

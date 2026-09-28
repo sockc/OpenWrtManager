@@ -56,3 +56,12 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - minSdk 26
 
 签名说明见 `docs/FIXED_SIGNING.md`。
+
+
+## V0.1.2 development
+
+- GitHub Releases update checking in the Android app
+- richer Cudy TR3000 / Kwrt system, network and Wi-Fi status
+- device band and signal reporting
+- searchable/redacted logs
+- router agent 0.1.2
