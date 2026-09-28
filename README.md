@@ -65,3 +65,12 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - device band and signal reporting
 - searchable/redacted logs
 - router agent 0.1.2
+
+
+## V0.1.3 Safe Apply
+
+- Router-side rollback transaction before risky configuration changes
+- 90-second confirmation window with automatic restore
+- Editable Wi-Fi, LAN, DHCP, DNS, WAN and WAN6 settings
+- PPPoE passwords are never returned to the app
+- Separate `owm-config` helper for configuration writes
