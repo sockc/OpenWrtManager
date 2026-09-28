@@ -22,10 +22,10 @@ jobs:
       - name: Restore permanent signing key
         shell: bash
         env:
-          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 }}
-          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
-          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+          SIGNING_KEY_BASE64: ${{ secrets.KEYSTORE }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.STOREPASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.KEYALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.KEYPASSWORD }}
         run: |
           set -euo pipefail
           test -n "$SIGNING_KEY_BASE64"
