@@ -68,7 +68,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
             "STALE" -> 30
             "PERMANENT" -> 20
             else -> 10
-        } + if (d.ip.contains('.')) 5 else 0 + if (d.connectionType == "wifi") 3 else 0
+        } + (if (d.ip.contains('.')) 5 else 0) + (if (d.connectionType == "wifi") 3 else 0)
 
         return parsed
             .groupBy { it.mac }
