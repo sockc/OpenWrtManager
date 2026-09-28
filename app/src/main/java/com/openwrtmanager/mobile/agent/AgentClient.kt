@@ -8,7 +8,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.1" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.2" }
+
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
         JSONObject(out).optString("version").ifBlank { null }
@@ -30,6 +31,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
             arch = o.optString("arch"),
             uptimeSeconds = o.optLong("uptime"),
             load1 = o.optDouble("load1"),
+            cpuPercent = o.optInt("cpu_percent"),
             memTotalKb = o.optLong("mem_total_kb"),
             memAvailableKb = o.optLong("mem_available_kb"),
             rootTotalKb = o.optLong("root_total_kb"),
@@ -52,14 +54,13 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                     interfaceName = o.optString("interface"),
                     state = o.optString("state"),
                     connectionType = o.optString("type", "unknown"),
-                    blocked = o.optBoolean("blocked", false)
+                    blocked = o.optBoolean("blocked", false),
+                    band = o.optString("band"),
+                    signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm")
                 ))
             }
         }
 
-        // Old 0.1.0 agents can return several neighbour rows for one MAC
-        // (multiple IPv4/IPv6/stale entries). Keep the most useful record so
-        // the UI can never crash on duplicate device identities.
         fun rank(d: DeviceInfo): Int = when (d.state.uppercase()) {
             "REACHABLE" -> 60
             "DELAY" -> 50
@@ -67,23 +68,34 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
             "STALE" -> 30
             "PERMANENT" -> 20
             else -> 10
-        } + if (d.ip.contains('.')) 5 else 0
+        } + if (d.ip.contains('.')) 5 else 0 + if (d.connectionType == "wifi") 3 else 0
 
         return parsed
             .groupBy { it.mac }
             .values
             .map { sameMac -> sameMac.maxByOrNull(::rank) ?: sameMac.first() }
-            .sortedWith(compareBy<DeviceInfo> { it.hostname == "未知设备" }.thenBy { it.hostname.lowercase() }.thenBy { it.ip })
+            .sortedWith(
+                compareBy<DeviceInfo> { it.hostname == "未知设备" }
+                    .thenBy { it.hostname.lowercase() }
+                    .thenBy { it.ip }
+            )
     }
 
     suspend fun network(): NetworkSummary {
         val o = JSONObject(ssh.exec("/usr/bin/owm-agent network"))
+        val dns = buildList {
+            val a = o.optJSONArray("wan_dns")
+            if (a != null) for (i in 0 until a.length()) add(a.optString(i))
+        }
         return NetworkSummary(
             wanProto = o.optString("wan_proto"),
             wanDevice = o.optString("wan_device"),
             wanIpv4 = o.optString("wan_ipv4"),
             wanIpv6 = o.optString("wan_ipv6"),
             wanUptime = o.optLong("wan_uptime"),
+            wanUp = o.optBoolean("wan_up"),
+            wanGateway = o.optString("wan_gateway"),
+            wanDns = dns,
             lanDevice = o.optString("lan_device"),
             lanIpv4 = o.optString("lan_ipv4"),
             lanIpv6 = o.optString("lan_ipv6")
@@ -99,12 +111,14 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                     section = o.optString("section"),
                     kind = o.optString("kind"),
                     device = o.optString("device"),
+                    ifname = o.optString("ifname"),
                     ssid = o.optString("ssid"),
                     encryption = o.optString("encryption"),
                     channel = o.optString("channel"),
                     band = o.optString("band"),
                     htmode = o.optString("htmode"),
-                    disabled = o.optBoolean("disabled", false)
+                    disabled = o.optBoolean("disabled", false),
+                    clientCount = o.optInt("client_count")
                 ))
             }
         }
@@ -129,8 +143,15 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
         ssh.exec("/usr/bin/owm-agent service '${name.replace("'", "")}' '${action.replace("'", "")}'", 20_000)
     }
 
-    suspend fun logs(lines: Int = 200): String = ssh.exec("/usr/bin/owm-agent logs ${lines.coerceIn(20, 1000)}")
-    suspend fun restartNetwork(): String = ssh.exec("/usr/bin/owm-agent network-restart", 20_000)
-    suspend fun reboot(): String = ssh.exec("/usr/bin/owm-agent reboot", 8_000)
-    suspend fun raw(command: String): String = ssh.exec(command, 30_000)
+    suspend fun logs(lines: Int = 200): String =
+        ssh.exec("/usr/bin/owm-agent logs ${lines.coerceIn(20, 1000)}")
+
+    suspend fun restartNetwork(): String =
+        ssh.exec("/usr/bin/owm-agent network-restart", 20_000)
+
+    suspend fun reboot(): String =
+        ssh.exec("/usr/bin/owm-agent reboot", 8_000)
+
+    suspend fun raw(command: String): String =
+        ssh.exec(command, 30_000)
 }
