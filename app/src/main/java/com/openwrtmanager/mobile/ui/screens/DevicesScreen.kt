@@ -20,7 +20,7 @@ fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             TextButton(onClick = vm::refreshDevices) { Text("刷新") }
         }
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(devices, key = { it.mac }) { d -> DeviceCard(d, vm) }
+            items(devices) { d -> DeviceCard(d, vm) }
         }
     }
 }

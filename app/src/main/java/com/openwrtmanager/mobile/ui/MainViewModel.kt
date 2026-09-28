@@ -51,8 +51,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             store.saveProfile(profile)
             _fingerprint.value = fp
             _connected.value = true
-            _agentInstalled.value = agent.agentVersion() != null
-            if (_agentInstalled.value) refreshCoreInternal()
+            val installedVersion = agent.agentVersion()
+            _agentInstalled.value = installedVersion != null
+            if (_agentInstalled.value) {
+                // Keep the tiny router-side agent in sync with the APK.
+                if (installedVersion != AgentClient.BUNDLED_AGENT_VERSION) {
+                    agent.installAgent()
+                }
+                refreshCoreInternal()
+            }
         }
     }
 

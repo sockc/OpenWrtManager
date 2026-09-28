@@ -29,8 +29,13 @@ jobs:
         run: |
           set -euo pipefail
           test -n "$SIGNING_KEY_BASE64"
+          test -n "$SIGNING_STORE_PASSWORD"
+          test -n "$SIGNING_KEY_ALIAS"
+          test -n "$SIGNING_KEY_PASSWORD"
           mkdir -p release-signing
-          printf '%s' "$SIGNING_KEY_BASE64" | base64 --decode > release-signing/openwrt-manager-release.jks
+          printf '%s' "$SIGNING_KEY_BASE64" | tr -d '\r\n ' | base64 --decode > release-signing/openwrt-manager-release.jks
+          test -s release-signing/openwrt-manager-release.jks
+          keytool -list -keystore release-signing/openwrt-manager-release.jks -storepass "$SIGNING_STORE_PASSWORD" -alias "$SIGNING_KEY_ALIAS" >/dev/null
           cat > signing.properties <<EOF2
           storeFile=release-signing/openwrt-manager-release.jks
           storePassword=$SIGNING_STORE_PASSWORD

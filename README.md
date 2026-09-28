@@ -1,6 +1,16 @@
-# OpenWrt Manager V0.1.0
+# OpenWrt Manager V0.1.1
 
-Android 原生 OpenWrt/Kwrt 管理客户端。V0.1.0 针对现代 OpenWrt/Kwrt（ubus/UCI/firewall4/nftables）设计，不依赖 LuCI 插件。
+Android 原生 OpenWrt/Kwrt 管理客户端。V0.1.1 针对现代 OpenWrt/Kwrt（ubus/UCI/firewall4/nftables）设计，不依赖 LuCI 插件。
+
+
+## V0.1.1 修复
+
+- 修复“设备”页因同一 MAC 出现多个邻居记录而闪退的问题。
+- 设备列表 APP 端按 MAC 去重，并优先保留 REACHABLE / IPv4 记录。
+- Router Agent 只输出 IPv4 邻居并按 MAC 去重，过滤 FAILED 条目。
+- 移除 Compose 设备列表对 MAC 唯一 key 的硬依赖，避免异常数据导致界面崩溃。
+- APP 连接时自动升级旧版 Router Agent。
+- GitHub Actions 适配 KEYSTORE / STOREPASSWORD / KEYALIAS / KEYPASSWORD Secrets，并加强签名文件校验。
 
 ## V0.1.0 已实现
 

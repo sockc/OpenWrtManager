@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.0
+# OpenWrt Manager Agent V0.1.1
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.0"
+VERSION="0.1.1"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
@@ -68,19 +68,26 @@ wifi_has_mac() {
 }
 
 cmd_devices() {
+    # A device may have several IPv4/IPv6 neighbour entries. The APP treats MAC
+    # as the device identity, so only emit one IPv4 record per MAC. This also
+    # avoids duplicate Compose list keys and keeps stale IPv6 neighbours out.
     first=1
+    seen=" "
     printf '['
-    ip neigh show 2>/dev/null | while IFS= read -r line; do
+    ip -4 neigh show 2>/dev/null | while IFS= read -r line; do
         set -- $line
         ip="${1:-}"; ifname="${3:-}"; mac="${5:-}"; state="${6:-}"
         valid_mac "$mac" || continue
         [ "$state" = "FAILED" ] && continue
+        mac_upper="$(echo "$mac" | tr a-f A-F)"
+        case "$seen" in *" $mac_upper "*) continue ;; esac
+        seen="$seen$mac_upper "
         hostname="$(awk -v m="$mac" 'tolower($2)==tolower(m){print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
         [ -n "$hostname" ] || hostname="$(awk -v i="$ip" '$3==i{print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
         type="ethernet"; wifi_has_mac "$mac" && type="wifi"
-        blocked=false; blocked_has "$(echo "$mac" | tr a-f A-F)" && blocked=true
+        blocked=false; blocked_has "$mac_upper" && blocked=true
         [ $first -eq 1 ] || printf ','; first=0
-        printf '{"ip":'; q "$ip"; printf ',"mac":'; q "$(echo "$mac" | tr a-f A-F)"; printf ',"hostname":'; q "$hostname";
+        printf '{"ip":'; q "$ip"; printf ',"mac":'; q "$mac_upper"; printf ',"hostname":'; q "$hostname";
         printf ',"interface":'; q "$ifname"; printf ',"state":'; q "$state"; printf ',"type":'; q "$type"; printf ',"blocked":%s}' "$blocked"
     done
     printf ']\n'

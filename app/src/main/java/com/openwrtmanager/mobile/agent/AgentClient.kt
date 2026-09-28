@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.1" }
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
         JSONObject(out).optString("version").ifBlank { null }
@@ -39,12 +40,14 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
 
     suspend fun devices(): List<DeviceInfo> {
         val a = JSONArray(ssh.exec("/usr/bin/owm-agent devices"))
-        return buildList {
+        val parsed = buildList {
             for (i in 0 until a.length()) {
-                val o = a.getJSONObject(i)
+                val o = a.optJSONObject(i) ?: continue
+                val mac = o.optString("mac").trim().uppercase()
+                if (mac.isBlank()) continue
                 add(DeviceInfo(
-                    ip = o.optString("ip"),
-                    mac = o.optString("mac"),
+                    ip = o.optString("ip").trim(),
+                    mac = mac,
                     hostname = o.optString("hostname").ifBlank { "未知设备" },
                     interfaceName = o.optString("interface"),
                     state = o.optString("state"),
@@ -53,6 +56,24 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                 ))
             }
         }
+
+        // Old 0.1.0 agents can return several neighbour rows for one MAC
+        // (multiple IPv4/IPv6/stale entries). Keep the most useful record so
+        // the UI can never crash on duplicate device identities.
+        fun rank(d: DeviceInfo): Int = when (d.state.uppercase()) {
+            "REACHABLE" -> 60
+            "DELAY" -> 50
+            "PROBE" -> 40
+            "STALE" -> 30
+            "PERMANENT" -> 20
+            else -> 10
+        } + if (d.ip.contains('.')) 5 else 0
+
+        return parsed
+            .groupBy { it.mac }
+            .values
+            .map { sameMac -> sameMac.maxByOrNull(::rank) ?: sameMac.first() }
+            .sortedWith(compareBy<DeviceInfo> { it.hostname == "未知设备" }.thenBy { it.hostname.lowercase() }.thenBy { it.ip })
     }
 
     suspend fun network(): NetworkSummary {
