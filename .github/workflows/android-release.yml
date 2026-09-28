@@ -6,19 +6,25 @@ on:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+
       - name: Restore permanent signing key
         shell: bash
         env:
@@ -32,24 +38,72 @@ jobs:
           test -n "$SIGNING_STORE_PASSWORD"
           test -n "$SIGNING_KEY_ALIAS"
           test -n "$SIGNING_KEY_PASSWORD"
+
           mkdir -p release-signing
-          printf '%s' "$SIGNING_KEY_BASE64" | tr -d '\r\n ' | base64 --decode > release-signing/openwrt-manager-release.jks
+
+          printf '%s' "$SIGNING_KEY_BASE64" \
+            | tr -d '\r\n ' \
+            | base64 --decode \
+            > release-signing/openwrt-manager-release.jks
+
           test -s release-signing/openwrt-manager-release.jks
-          keytool -list -keystore release-signing/openwrt-manager-release.jks -storepass "$SIGNING_STORE_PASSWORD" -alias "$SIGNING_KEY_ALIAS" >/dev/null
+
+          keytool -list \
+            -keystore release-signing/openwrt-manager-release.jks \
+            -storepass "$SIGNING_STORE_PASSWORD" \
+            -alias "$SIGNING_KEY_ALIAS" \
+            >/dev/null
+
           cat > signing.properties <<EOF2
           storeFile=release-signing/openwrt-manager-release.jks
           storePassword=$SIGNING_STORE_PASSWORD
           keyAlias=$SIGNING_KEY_ALIAS
           keyPassword=$SIGNING_KEY_PASSWORD
           EOF2
+
       - name: Build signed release APK
         run: gradle --no-daemon :app:assembleRelease
+
       - name: Verify APK signature
         run: |
+          set -euo pipefail
           SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           APKSIGNER="$(find "$SDK_ROOT/build-tools" -type f -name apksigner | sort -V | tail -1)"
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
-      - uses: actions/upload-artifact@v4
+
+      - name: Prepare release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            APK_NAME="OpenWrtManager-${GITHUB_REF_NAME}.apk"
+          else
+            APK_NAME="OpenWrtManager-dev-${GITHUB_RUN_NUMBER}.apk"
+          fi
+          cp app/build/outputs/apk/release/app-release.apk "release/$APK_NAME"
+          echo "APK_NAME=$APK_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
         with:
           name: OpenWrtManager-release
-          path: app/build/outputs/apk/release/app-release.apk
+          path: release/${{ env.APK_NAME }}
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="$GITHUB_REF_NAME"
+          APK="release/$APK_NAME"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" --clobber
+          else
+            gh release create "$TAG" "$APK" \
+              --title "OpenWrt Manager ${TAG#v}" \
+              --generate-notes
+          fi
