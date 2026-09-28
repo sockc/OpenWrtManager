@@ -214,13 +214,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         ip: String,
         netmask: String,
         gateway: String,
-        mtu: String
+        mtu: String,
+        wan6Enabled: Boolean
     ) = safeApplyChange("network") {
         agent.setWan(proto, username, password, ip, netmask, gateway, mtu)
+        agent.setWan6(wan6Enabled)
     }
-
-    fun applyWan6(enabled: Boolean) =
-        safeApplyChange("network") { agent.setWan6(enabled) }
 
     private fun safeApplyChange(kind: String, setter: suspend () -> Unit) = viewModelScope.launch {
         _busy.value = true
