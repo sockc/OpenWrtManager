@@ -118,9 +118,9 @@ fun NetworkScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                             Text(w.ssid.ifBlank { w.section }, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 listOfNotNull(
-                                    radio?.band?.ifBlank { null },
-                                    radio?.channel?.ifBlank { null }?.let { "信道 $it" },
-                                    radio?.htmode?.ifBlank { null }
+                                    radio?.band?.takeIf { it.isNotBlank() },
+                                    radio?.channel?.takeIf { it.isNotBlank() }?.let { "信道 $it" },
+                                    radio?.htmode?.takeIf { it.isNotBlank() }
                                 ).joinToString(" · ").ifBlank { w.device },
                                 style = MaterialTheme.typography.bodySmall
                             )
