@@ -300,7 +300,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
         )
 
     private fun b64(value: String): String =
-        Base64.getEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
+        Base64.getEncoder().encodeToString(value.toByteArray(Charsets.UTF_8))
 
     private fun safeName(value: String): String =
         value.replace(Regex("[^A-Za-z0-9_.@+-]"), "")
