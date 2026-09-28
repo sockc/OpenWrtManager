@@ -1,0 +1,6 @@
+# Copy to signing.properties and point it to the permanent release keystore.
+# signing.properties is gitignored and MUST NOT be committed.
+storeFile=release-signing/openwrt-manager-release.jks
+storePassword=CHANGE_ME
+keyAlias=openwrt-manager
+keyPassword=CHANGE_ME
