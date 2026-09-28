@@ -61,7 +61,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.2：实机状态 / 设备识别 / Wi-Fi 与网络只读详情 / 服务管理 / 日志脱敏 / GitHub Releases 自动更新",
+                "V0.1.3：Safe Apply / Wi-Fi、LAN、DHCP、DNS、WAN 可编辑 / 自动回滚 / 固定签名升级",
                 style = MaterialTheme.typography.bodySmall
             )
         }
