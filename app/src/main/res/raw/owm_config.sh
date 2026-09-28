@@ -347,7 +347,7 @@ case "$1" in
     safe-status) cmd_safe_status ;;
     safe-confirm) cmd_safe_confirm "$2" ;;
     safe-rollback) cmd_safe_rollback "$2" ;;
-    set-wifi) cmd_set_wifi "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "$10" ;;
+    set-wifi) cmd_set_wifi "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" ;;
     set-lan) cmd_set_lan "$2" "$3" ;;
     set-dhcp) cmd_set_dhcp "$2" "$3" "$4" ;;
     set-dns) cmd_set_dns "$2" "$3" ;;
