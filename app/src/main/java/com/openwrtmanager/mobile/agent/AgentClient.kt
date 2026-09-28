@@ -6,9 +6,10 @@ import com.openwrtmanager.mobile.model.*
 import com.openwrtmanager.mobile.ssh.SshManager
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.2" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.3" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -47,17 +48,19 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                 val o = a.optJSONObject(i) ?: continue
                 val mac = o.optString("mac").trim().uppercase()
                 if (mac.isBlank()) continue
-                add(DeviceInfo(
-                    ip = o.optString("ip").trim(),
-                    mac = mac,
-                    hostname = o.optString("hostname").ifBlank { "未知设备" },
-                    interfaceName = o.optString("interface"),
-                    state = o.optString("state"),
-                    connectionType = o.optString("type", "unknown"),
-                    blocked = o.optBoolean("blocked", false),
-                    band = o.optString("band"),
-                    signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm")
-                ))
+                add(
+                    DeviceInfo(
+                        ip = o.optString("ip").trim(),
+                        mac = mac,
+                        hostname = o.optString("hostname").ifBlank { "未知设备" },
+                        interfaceName = o.optString("interface"),
+                        state = o.optString("state"),
+                        connectionType = o.optString("type", "unknown"),
+                        blocked = o.optBoolean("blocked", false),
+                        band = o.optString("band"),
+                        signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm")
+                    )
+                )
             }
         }
 
@@ -107,21 +110,148 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
         return buildList {
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
-                add(WifiNetwork(
-                    section = o.optString("section"),
-                    kind = o.optString("kind"),
-                    device = o.optString("device"),
-                    ifname = o.optString("ifname"),
-                    ssid = o.optString("ssid"),
-                    encryption = o.optString("encryption"),
-                    channel = o.optString("channel"),
-                    band = o.optString("band"),
-                    htmode = o.optString("htmode"),
-                    disabled = o.optBoolean("disabled", false),
-                    clientCount = o.optInt("client_count")
-                ))
+                add(
+                    WifiNetwork(
+                        section = o.optString("section"),
+                        kind = o.optString("kind"),
+                        device = o.optString("device"),
+                        ifname = o.optString("ifname"),
+                        ssid = o.optString("ssid"),
+                        encryption = o.optString("encryption"),
+                        channel = o.optString("channel"),
+                        band = o.optString("band"),
+                        htmode = o.optString("htmode"),
+                        country = o.optString("country"),
+                        disabled = o.optBoolean("disabled", false),
+                        clientCount = o.optInt("client_count"),
+                        keySet = o.optBoolean("key_set", false)
+                    )
+                )
             }
         }
+    }
+
+    suspend fun config(): NetworkConfig {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent config"))
+        val dns = buildList {
+            val a = o.optJSONArray("dns_servers")
+            if (a != null) for (i in 0 until a.length()) add(a.optString(i))
+        }
+        return NetworkConfig(
+            lanIp = o.optString("lan_ip"),
+            lanNetmask = o.optString("lan_netmask"),
+            dhcpStart = o.optString("dhcp_start"),
+            dhcpLimit = o.optString("dhcp_limit"),
+            dhcpLeaseTime = o.optString("dhcp_leasetime"),
+            dnsPeer = o.optBoolean("dns_peer", true),
+            dnsServers = dns,
+            wanProto = o.optString("wan_proto"),
+            wanUsername = o.optString("wan_username"),
+            wanPasswordSet = o.optBoolean("wan_password_set"),
+            wanMtu = o.optString("wan_mtu"),
+            wanIp = o.optString("wan_ip"),
+            wanNetmask = o.optString("wan_netmask"),
+            wanGateway = o.optString("wan_gateway"),
+            wan6Enabled = o.optBoolean("wan6_enabled", true)
+        )
+    }
+
+    suspend fun safeBegin(kind: String, timeoutSeconds: Int = 90): SafeApplyState {
+        val safeKind = kind.replace(Regex("[^A-Za-z0-9_-]"), "")
+        val o = JSONObject(
+            ssh.exec(
+                "/usr/bin/owm-agent safe-begin '$safeKind' ${timeoutSeconds.coerceIn(45, 180)}",
+                20_000
+            )
+        )
+        return safeStateFromJson(o)
+    }
+
+    suspend fun safeStatus(): SafeApplyState =
+        safeStateFromJson(JSONObject(ssh.exec("/usr/bin/owm-agent safe-status")))
+
+    suspend fun safeConfirm(transactionId: String) {
+        val tx = transactionId.replace(Regex("[^A-Za-z0-9_.-]"), "")
+        ssh.exec("/usr/bin/owm-agent safe-confirm '$tx'", 15_000)
+    }
+
+    suspend fun safeRollback(transactionId: String) {
+        val tx = transactionId.replace(Regex("[^A-Za-z0-9_.-]"), "")
+        ssh.exec("/usr/bin/owm-agent safe-rollback '$tx'", 20_000)
+    }
+
+    suspend fun setWifi(
+        ifaceSection: String,
+        deviceSection: String,
+        enabled: Boolean,
+        ssid: String,
+        encryption: String,
+        password: String?,
+        channel: String,
+        htmode: String,
+        country: String
+    ) {
+        val args = listOf(
+            safeName(ifaceSection),
+            safeName(deviceSection),
+            if (enabled) "1" else "0",
+            b64(ssid),
+            safeToken(encryption),
+            b64(password.orEmpty()),
+            safeToken(channel.ifBlank { "auto" }),
+            safeToken(htmode),
+            safeToken(country.uppercase())
+        ).joinToString(" ") { "'$it'" }
+        ssh.exec("/usr/bin/owm-agent set-wifi $args", 20_000)
+    }
+
+    suspend fun setLan(ip: String, netmask: String) {
+        ssh.exec("/usr/bin/owm-agent set-lan '${safeToken(ip)}' '${safeToken(netmask)}'", 20_000)
+    }
+
+    suspend fun setDhcp(start: String, limit: String, leaseTime: String) {
+        ssh.exec(
+            "/usr/bin/owm-agent set-dhcp '${safeToken(start)}' '${safeToken(limit)}' '${safeToken(leaseTime)}'",
+            20_000
+        )
+    }
+
+    suspend fun setDns(peer: Boolean, servers: List<String>) {
+        val packed = servers.filter { it.isNotBlank() }.joinToString(" ")
+        ssh.exec(
+            "/usr/bin/owm-agent set-dns '${if (peer) "1" else "0"}' '${b64(packed)}'",
+            20_000
+        )
+    }
+
+    suspend fun setWan(
+        proto: String,
+        username: String,
+        password: String?,
+        ip: String,
+        netmask: String,
+        gateway: String,
+        mtu: String
+    ) {
+        val args = listOf(
+            safeToken(proto),
+            b64(username),
+            b64(password.orEmpty()),
+            safeToken(ip),
+            safeToken(netmask),
+            safeToken(gateway),
+            safeToken(mtu)
+        ).joinToString(" ") { "'$it'" }
+        ssh.exec("/usr/bin/owm-agent set-wan $args", 20_000)
+    }
+
+    suspend fun setWan6(enabled: Boolean) {
+        ssh.exec("/usr/bin/owm-agent set-wan6 '${if (enabled) "1" else "0"}'", 20_000)
+    }
+
+    suspend fun applyConfig(kind: String) {
+        val safeKind = kind.replace(Regex("[^A-Za-z0-9_-]"), "")
+        ssh.exec("/usr/bin/owm-agent apply '$safeKind'", 10_000)
     }
 
     suspend fun services(): List<ServiceInfo> {
@@ -154,4 +284,22 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
 
     suspend fun raw(command: String): String =
         ssh.exec(command, 30_000)
+
+    private fun safeStateFromJson(o: JSONObject): SafeApplyState =
+        SafeApplyState(
+            active = o.optBoolean("active", false),
+            transactionId = o.optString("transaction_id"),
+            deadlineEpoch = o.optLong("deadline_epoch"),
+            secondsRemaining = o.optLong("seconds_remaining"),
+            kind = o.optString("kind")
+        )
+
+    private fun b64(value: String): String =
+        Base64.getEncoder().withoutPadding().encodeToString(value.toByteArray(Charsets.UTF_8))
+
+    private fun safeName(value: String): String =
+        value.replace(Regex("[^A-Za-z0-9_.@+-]"), "")
+
+    private fun safeToken(value: String): String =
+        value.replace(Regex("[^A-Za-z0-9_.:/@+-]"), "")
 }
