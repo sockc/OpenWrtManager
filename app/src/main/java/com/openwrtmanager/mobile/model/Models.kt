@@ -59,8 +59,36 @@ data class WifiNetwork(
     val channel: String = "",
     val band: String = "",
     val htmode: String = "",
+    val country: String = "",
     val disabled: Boolean = false,
-    val clientCount: Int = 0
+    val clientCount: Int = 0,
+    val keySet: Boolean = false
+)
+
+data class NetworkConfig(
+    val lanIp: String = "",
+    val lanNetmask: String = "",
+    val dhcpStart: String = "",
+    val dhcpLimit: String = "",
+    val dhcpLeaseTime: String = "",
+    val dnsPeer: Boolean = true,
+    val dnsServers: List<String> = emptyList(),
+    val wanProto: String = "",
+    val wanUsername: String = "",
+    val wanPasswordSet: Boolean = false,
+    val wanMtu: String = "",
+    val wanIp: String = "",
+    val wanNetmask: String = "",
+    val wanGateway: String = "",
+    val wan6Enabled: Boolean = true
+)
+
+data class SafeApplyState(
+    val active: Boolean = false,
+    val transactionId: String = "",
+    val deadlineEpoch: Long = 0,
+    val secondsRemaining: Long = 0,
+    val kind: String = ""
 )
 
 data class ServiceInfo(
