@@ -179,8 +179,7 @@ fun NetworkScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 onDismiss = { dialog = null },
                 onSave = { proto, user, password, ip, mask, gateway, mtu, wan6 ->
                     dialog = null
-                    vm.applyWan(proto, user, password, ip, mask, gateway, mtu)
-                    if (wan6 != it.wan6Enabled) vm.applyWan6(wan6)
+                    vm.applyWan(proto, user, password, ip, mask, gateway, mtu, wan6)
                 }
             )
         }
