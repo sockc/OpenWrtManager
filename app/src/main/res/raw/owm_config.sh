@@ -7,6 +7,8 @@ BASE="/etc/openwrt-manager"
 SAFE="$BASE/safe-apply"
 ALIASES="$BASE/device_aliases.tsv"
 SCHEDULES="$BASE/device_schedules.tsv"
+QOS_POLICIES="$BASE/device_qos.tsv"
+QOS_INIT="/etc/init.d/owm-qos"
 CRON="/etc/crontabs/root"
 SELF="/usr/bin/owm-config"
 
@@ -30,11 +32,31 @@ decode_b64() {
 
 cmd_install() {
     mkdir -p "$BASE" "$SAFE"
-    touch "$ALIASES" "$SCHEDULES" /etc/sysupgrade.conf
+    touch "$ALIASES" "$SCHEDULES" "$QOS_POLICIES" /etc/sysupgrade.conf
     grep -qxF '/etc/openwrt-manager/' /etc/sysupgrade.conf 2>/dev/null || echo '/etc/openwrt-manager/' >> /etc/sysupgrade.conf
     if [ "$0" != "$SELF" ]; then cp "$0" "$SELF"; fi
     chmod 700 "$SELF"
+    cat > "$QOS_INIT" <<'EOF'
+#!/bin/sh /etc/rc.common
+START=22
+STOP=88
+
+start() {
+    /usr/bin/owm-config qos-reload >/dev/null 2>&1 || true
+}
+
+reload() {
+    start
+}
+
+stop() {
+    /usr/bin/owm-config qos-stop >/dev/null 2>&1 || true
+}
+EOF
+    chmod 755 "$QOS_INIT"
+    "$QOS_INIT" enable >/dev/null 2>&1 || true
     regen_cron >/dev/null 2>&1 || true
+    qos_reload >/dev/null 2>&1 || true
     printf '{"ok":true,"version":"%s"}\n' "$VERSION"
 }
 
@@ -194,44 +216,121 @@ cmd_device_static_ip() {
     echo '{"ok":true}'
 }
 
-find_qos_client_by_mac() {
-    target="$(printf '%s' "$1" | tr A-F a-f)"
-    [ -f /etc/config/nft-qos ] || return 1
-    for sec in $(uci -q show nft-qos 2>/dev/null | sed -n 's/^nft-qos\.\([^.=]*\)=client$/\1/p'); do
-        m="$(uci -q get "nft-qos.$sec.macaddr" 2>/dev/null)"
-        [ "$(printf '%s' "$m" | tr A-F a-f)" = "$target" ] && { printf '%s' "$sec"; return 0; }
-    done
-    return 1
+qos_policy_row() {
+    [ -f "$QOS_POLICIES" ] || return 0
+    awk -F '\t' -v m="$1" 'toupper($1)==toupper(m){print; exit}' "$QOS_POLICIES" 2>/dev/null
 }
 
-qos_rate_to_kbps() {
-    rate="$1"; unit="$2"
-    valid_num "$rate" || rate=0
-    case "$unit" in
-        mbytes) echo $((rate * 8192)) ;;
-        mbits) echo $((rate * 1024)) ;;
-        kbits) echo "$rate" ;;
-        *) echo $((rate * 8)) ;;
-    esac
+qos_lan_mode() {
+    lan_dev="$(uci_get network.lan.device)"
+    [ -n "$lan_dev" ] || lan_dev="$(uci_get network.lan.ifname | awk '{print $1}')"
+    if [ -n "$lan_dev" ] && [ -d "/sys/class/net/$lan_dev/bridge" ]; then
+        printf '%s' "bridge"
+    else
+        printf '%s' "inet"
+    fi
+}
+
+qos_generate_script() {
+    outfile="$1"
+    table_name="$2"
+    mode="$(qos_lan_mode)"
+
+    if [ "$mode" = "bridge" ]; then
+        family="bridge"
+        upload_hook="prerouting"
+        download_hook="postrouting"
+    else
+        family="inet"
+        upload_hook="postrouting"
+        download_hook="prerouting"
+    fi
+
+    {
+        printf 'table %s %s {\n' "$family" "$table_name"
+        printf '  chain upload {\n'
+        printf '    type filter hook %s priority 0; policy accept;\n' "$upload_hook"
+        if [ -f "$QOS_POLICIES" ]; then
+            while IFS="$(printf '\t')" read -r mac down up; do
+                valid_mac "$mac" || continue
+                valid_num "$up" || continue
+                [ "$up" -gt 0 ] || continue
+                urate=$(((up + 7) / 8))
+                [ "$urate" -gt 0 ] || urate=1
+                printf '    ether saddr %s limit rate over %s kbytes/second drop\n' "$mac" "$urate"
+            done < "$QOS_POLICIES"
+        fi
+        printf '  }\n'
+        printf '  chain download {\n'
+        printf '    type filter hook %s priority 0; policy accept;\n' "$download_hook"
+        if [ -f "$QOS_POLICIES" ]; then
+            while IFS="$(printf '\t')" read -r mac down up; do
+                valid_mac "$mac" || continue
+                valid_num "$down" || continue
+                [ "$down" -gt 0 ] || continue
+                drate=$(((down + 7) / 8))
+                [ "$drate" -gt 0 ] || drate=1
+                printf '    ether daddr %s limit rate over %s kbytes/second drop\n' "$mac" "$drate"
+            done < "$QOS_POLICIES"
+        fi
+        printf '  }\n'
+        printf '}\n'
+    } > "$outfile"
+}
+
+qos_delete_live_table() {
+    nft delete table bridge owm_qos_mac >/dev/null 2>&1 || true
+    nft delete table inet owm_qos_mac >/dev/null 2>&1 || true
+}
+
+qos_validate_backend() {
+    command -v nft >/dev/null 2>&1 || return 1
+    probe="/tmp/owm-qos-probe.$$"
+    qos_generate_script "$probe" "owm_qos_probe_$$"
+    nft -c -f "$probe" >/tmp/owm-qos-check.$$ 2>&1
+    rc=$?
+    rm -f "$probe" /tmp/owm-qos-check.$$
+    return "$rc"
+}
+
+qos_reload() {
+    command -v nft >/dev/null 2>&1 || return 1
+    testfile="/tmp/owm-qos-test.$$"
+    livefile="/tmp/owm-qos-live.$$"
+
+    qos_generate_script "$testfile" "owm_qos_test_$$"
+    if ! nft -c -f "$testfile" >/tmp/owm-qos-check.$$ 2>&1; then
+        cat /tmp/owm-qos-check.$$ >&2
+        rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$
+        return 2
+    fi
+
+    qos_generate_script "$livefile" "owm_qos_mac"
+    qos_delete_live_table
+    if ! nft -f "$livefile" >/tmp/owm-qos-apply.$$ 2>&1; then
+        cat /tmp/owm-qos-apply.$$ >&2
+        rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$ /tmp/owm-qos-apply.$$
+        return 3
+    fi
+
+    rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$ /tmp/owm-qos-apply.$$
+    return 0
 }
 
 cmd_qos_capability() {
     installed=false
     running=false
     available=false
-    detail="未安装 nft-qos"
+    detail="系统缺少 nftables"
 
-    if [ -f /etc/config/nft-qos ] || opkg status nft-qos 2>/dev/null | grep -q '^Status: .* installed'; then
+    if command -v nft >/dev/null 2>&1; then
         installed=true
-        detail="nft-qos 已安装"
-    fi
-    if [ -f /etc/config/nft-qos ] && [ -x /etc/init.d/nft-qos ]; then
-        available=true
-        if /etc/init.d/nft-qos status >/dev/null 2>&1; then
+        if qos_validate_backend; then
+            available=true
             running=true
-            detail="nft-qos 可用"
+            detail="原生 nftables 单设备限速可用"
         else
-            detail="nft-qos 可用，服务状态由规则加载决定"
+            detail="nftables 存在，但当前内核不支持所需的 MAC 限速规则"
         fi
     fi
 
@@ -244,53 +343,68 @@ cmd_device_qos() {
     mac="$(printf '%s' "$1" | tr a-f A-F)"
     down="$2"
     up="$3"
-    label="$(decode_b64 "$4")"
+
     valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
     valid_num "$down" && valid_num "$up" || { echo '{"ok":false,"error":"invalid rate"}'; exit 3; }
     [ "$down" -ge 128 ] && [ "$down" -le 1000000 ] && [ "$up" -ge 128 ] && [ "$up" -le 1000000 ] || {
         echo '{"ok":false,"error":"rate out of range"}'
         exit 4
     }
-    [ -f /etc/config/nft-qos ] && [ -x /etc/init.d/nft-qos ] || {
-        echo '{"ok":false,"error":"nft-qos unavailable"}'
+    qos_validate_backend || {
+        echo '{"ok":false,"error":"native nftables qos unavailable"}'
         exit 5
     }
 
-    sec="$(find_qos_client_by_mac "$mac" 2>/dev/null || true)"
-    [ -n "$sec" ] || sec="$(uci add nft-qos client)"
+    mkdir -p "$BASE"
+    touch "$QOS_POLICIES"
+    cp "$QOS_POLICIES" "$QOS_POLICIES.bak" 2>/dev/null || true
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$QOS_POLICIES" > "$QOS_POLICIES.tmp" || true
+    printf '%s\t%s\t%s\n' "$mac" "$down" "$up" >> "$QOS_POLICIES.tmp"
+    mv "$QOS_POLICIES.tmp" "$QOS_POLICIES"
 
-    drate=$(((down + 7) / 8))
-    urate=$(((up + 7) / 8))
-    [ -n "$label" ] || label="$mac"
-
-    uci set "nft-qos.@default[0].limit_enable=1"
-    uci set "nft-qos.@default[0].limit_type=static"
-    uci set "nft-qos.@default[0].limit_mac_enable=1"
-    uci set "nft-qos.$sec.macaddr=$mac"
-    uci set "nft-qos.$sec.hostname=$label"
-    uci set "nft-qos.$sec.drunit=kbytes"
-    uci set "nft-qos.$sec.urunit=kbytes"
-    uci set "nft-qos.$sec.drate=$drate"
-    uci set "nft-qos.$sec.urate=$urate"
-    uci commit nft-qos
-
-    /etc/init.d/nft-qos enable >/dev/null 2>&1 || true
-    /etc/init.d/nft-qos restart >/dev/null 2>&1 || {
-        echo '{"ok":false,"error":"nft-qos restart failed"}'
+    if ! qos_reload; then
+        [ -f "$QOS_POLICIES.bak" ] && mv "$QOS_POLICIES.bak" "$QOS_POLICIES"
+        qos_reload >/dev/null 2>&1 || true
+        echo '{"ok":false,"error":"failed to apply nftables qos"}'
         exit 6
-    }
+    fi
+
+    rm -f "$QOS_POLICIES.bak"
     echo '{"ok":true}'
 }
 
 cmd_device_qos_clear() {
     mac="$(printf '%s' "$1" | tr a-f A-F)"
     valid_mac "$mac" || exit 2
-    sec="$(find_qos_client_by_mac "$mac" 2>/dev/null || true)"
-    if [ -n "$sec" ]; then
-        uci -q delete "nft-qos.$sec" || true
-        uci commit nft-qos
-        [ -x /etc/init.d/nft-qos ] && /etc/init.d/nft-qos restart >/dev/null 2>&1 || true
+
+    mkdir -p "$BASE"
+    touch "$QOS_POLICIES"
+    cp "$QOS_POLICIES" "$QOS_POLICIES.bak" 2>/dev/null || true
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$QOS_POLICIES" > "$QOS_POLICIES.tmp" || true
+    mv "$QOS_POLICIES.tmp" "$QOS_POLICIES"
+
+    if ! qos_reload; then
+        [ -f "$QOS_POLICIES.bak" ] && mv "$QOS_POLICIES.bak" "$QOS_POLICIES"
+        qos_reload >/dev/null 2>&1 || true
+        echo '{"ok":false,"error":"failed to clear nftables qos"}'
+        exit 3
     fi
+
+    rm -f "$QOS_POLICIES.bak"
+    echo '{"ok":true}'
+}
+
+cmd_qos_reload() {
+    if qos_reload; then
+        echo '{"ok":true}'
+    else
+        echo '{"ok":false,"error":"qos reload failed"}'
+        exit 2
+    fi
+}
+
+cmd_qos_stop() {
+    qos_delete_live_table
     echo '{"ok":true}'
 }
 
@@ -445,14 +559,13 @@ cmd_device_policy() {
     qos_enabled=false
     down=0
     up=0
-    qos_sec="$(find_qos_client_by_mac "$mac" 2>/dev/null || true)"
-    if [ -n "$qos_sec" ]; then
-        drate="$(uci -q get "nft-qos.$qos_sec.drate" 2>/dev/null)"
-        urate="$(uci -q get "nft-qos.$qos_sec.urate" 2>/dev/null)"
-        drunit="$(uci -q get "nft-qos.$qos_sec.drunit" 2>/dev/null)"
-        urunit="$(uci -q get "nft-qos.$qos_sec.urunit" 2>/dev/null)"
-        down="$(qos_rate_to_kbps "${drate:-0}" "${drunit:-kbytes}")"
-        up="$(qos_rate_to_kbps "${urate:-0}" "${urunit:-kbytes}")"
+    qos_row="$(qos_policy_row "$mac")"
+    if [ -n "$qos_row" ]; then
+        oldifs="$IFS"; IFS="$(printf '\t')"; set -- $qos_row; IFS="$oldifs"
+        down="${2:-0}"
+        up="${3:-0}"
+        valid_num "$down" || down=0
+        valid_num "$up" || up=0
         [ "$down" -gt 0 ] && [ "$up" -gt 0 ] && qos_enabled=true
     fi
 
@@ -1022,6 +1135,8 @@ case "$1" in
     qos-capability) cmd_qos_capability ;;
     device-qos) cmd_device_qos "$2" "$3" "$4" "$5" ;;
     device-qos-clear) cmd_device_qos_clear "$2" ;;
+    qos-reload) cmd_qos_reload ;;
+    qos-stop) cmd_qos_stop ;;
     device-schedule) cmd_device_schedule "$2" "$3" "$4" "$5" "$6" ;;
     safe-begin) cmd_safe_begin "$2" "$3" ;;
     safe-status) cmd_safe_status ;;
