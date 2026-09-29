@@ -135,3 +135,14 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Scheduled internet blocking is implemented through OpenWrt cron and router-side block/unblock commands. Overnight windows such as 22:00-07:00 are supported.
 - Manual blocking and scheduled blocking are tracked separately, so a schedule ending cannot accidentally cancel a manual block.
 - Device aliases, schedules, and block state under `/etc/openwrt-manager/` are added to `/etc/sysupgrade.conf` so standard OpenWrt configuration backups preserve them.
+
+
+## V0.2.0 Application Control Center
+
+- Services is upgraded to an Application Control Center with embedded management panels for installed LuCI applications.
+- The router agent discovers actual `admin/services/*` LuCI menu entries and only identifies named applications when there is installation evidence such as an init script, UCI config, package, or LuCI menu.
+- This removes the old false-positive behavior where a shared `sing-box` process could make PassWall and PassWall2 appear even when they were not installed.
+- First-class mappings cover the user's current application set including Nikki, HomeProxy, MosDNS, DDNS-Go, Nezha Agent, UPnP/PCP, plus other common LuCI service applications.
+- Panel-only features such as Wake on LAN or custom public-HTTPS configuration pages can still appear through dynamic LuCI menu discovery even when there is no long-running init.d service.
+- Management panels open inside the Android app through an SSH local port forward to the router's local uhttpd listener. WebView traffic does not need to expose the LuCI HTTP service directly on the LAN.
+- HTTPS certificate errors are only accepted for the tunnel's local `127.0.0.1` endpoint; SSH host-key verification remains the transport trust boundary.
