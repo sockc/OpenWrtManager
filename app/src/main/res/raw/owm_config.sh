@@ -177,6 +177,11 @@ cmd_safe_rollback() {
         /etc/init.d/network restart >/dev/null 2>&1 || true
         wifi reload >/dev/null 2>&1 || true
         /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+        if command -v fw4 >/dev/null 2>&1; then
+            fw4 reload >/dev/null 2>&1 || true
+        else
+            /etc/init.d/firewall restart >/dev/null 2>&1 || true
+        fi
     ) >/dev/null 2>&1 &
 }
 
@@ -315,6 +320,231 @@ cmd_set_wan6() {
         uci set network.wan6.disabled=1
     fi
     uci commit network
+    echo '{"ok":true}'
+}
+
+
+valid_rule_index() {
+    valid_num "$1" && [ "$1" -ge 0 ] && [ "$1" -le 999 ]
+}
+
+valid_port_spec() {
+    echo "$1" | grep -Eq '^[0-9]{1,5}(-[0-9]{1,5})?
+    kind="$1"
+    echo '{"ok":true,"applying":true}'
+
+    case "$kind" in
+        wifi)
+            (sleep 1; wifi reload >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1) >/dev/null 2>&1 &
+            ;;
+        dhcp)
+            (sleep 1; /etc/init.d/dnsmasq restart >/dev/null 2>&1) >/dev/null 2>&1 &
+            ;;
+        firewall)
+            (
+                sleep 1
+                if command -v fw4 >/dev/null 2>&1; then
+                    fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+                else
+                    /etc/init.d/firewall restart >/dev/null 2>&1 || true
+                fi
+            ) >/dev/null 2>&1 &
+            ;;
+        *)
+            (
+                sleep 1
+                /etc/init.d/network restart >/dev/null 2>&1 || true
+                /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+            ) >/dev/null 2>&1 &
+            ;;
+    esac
+}
+
+case "$1" in
+    install) cmd_install ;;
+    version) printf '{"version":"%s"}\n' "$VERSION" ;;
+    config) cmd_config ;;
+    safe-begin) cmd_safe_begin "$2" "$3" ;;
+    safe-status) cmd_safe_status ;;
+    safe-confirm) cmd_safe_confirm "$2" ;;
+    safe-rollback) cmd_safe_rollback "$2" ;;
+    set-wifi) cmd_set_wifi "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" ;;
+    set-lan) cmd_set_lan "$2" "$3" ;;
+    set-dhcp) cmd_set_dhcp "$2" "$3" "$4" ;;
+    set-dns) cmd_set_dns "$2" "$3" ;;
+    set-wan) cmd_set_wan "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    set-wan6) cmd_set_wan6 "$2" ;;
+    firewall-list) cmd_firewall_list ;;
+    firewall-add-redirect) cmd_firewall_add_redirect "$2" "$3" "$4" "$5" "$6" "$7" ;;
+    firewall-set-redirect) cmd_firewall_set_redirect "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    firewall-delete-redirect) cmd_firewall_delete_redirect "$2" ;;
+    firewall-toggle-rule) cmd_firewall_toggle_rule "$2" "$3" ;;
+    apply) cmd_apply "$2" ;;
+    *) echo '{"error":"unknown command"}'; exit 2 ;;
+esac
+ || return 1
+    first="${1%%-*}"
+    last="${1##*-}"
+    [ "$first" -ge 1 ] && [ "$first" -le 65535 ] && [ "$last" -ge 1 ] && [ "$last" -le 65535 ]
+}
+
+normalize_proto_read() {
+    case "$1" in
+        "tcp udp"|"udp tcp"|"tcpudp") echo "tcpudp" ;;
+        udp) echo "udp" ;;
+        *) echo "tcp" ;;
+    esac
+}
+
+normalize_proto_write() {
+    case "$1" in
+        tcpudp) echo "tcp udp" ;;
+        udp) echo "udp" ;;
+        *) echo "tcp" ;;
+    esac
+}
+
+cmd_firewall_list() {
+    printf '{"zones":['
+    first=1
+    for sec in $(uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\(@zone\[[0-9][0-9]*\]\)=zone$/\1/p'); do
+        [ "$first" = "1" ] || printf ','
+        first=0
+        name="$(uci_get firewall.$sec.name)"
+        input="$(uci_get firewall.$sec.input)"
+        output="$(uci_get firewall.$sec.output)"
+        forward="$(uci_get firewall.$sec.forward)"
+        masq="$(uci_get firewall.$sec.masq)"; [ "$masq" = "1" ] && masq=true || masq=false
+        mtu="$(uci_get firewall.$sec.mtu_fix)"; [ "$mtu" = "1" ] && mtu=true || mtu=false
+        printf '{"name":'; q "$name"
+        printf ',"input":'; q "$input"
+        printf ',"output":'; q "$output"
+        printf ',"forward":'; q "$forward"
+        printf ',"masquerading":%s,"mtu_fix":%s,"networks":[' "$masq" "$mtu"
+        nf=1
+        for n in $(uci -q get "firewall.$sec.network" 2>/dev/null); do
+            [ "$nf" = "1" ] || printf ','
+            nf=0
+            q "$n"
+        done
+        printf ']}'
+    done
+
+    printf '],"redirects":['
+    first=1
+    idx=0
+    for sec in $(uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\(@redirect\[[0-9][0-9]*\]\)=redirect$/\1/p'); do
+        [ "$first" = "1" ] || printf ','
+        first=0
+        enabled="$(uci_get firewall.$sec.enabled)"; [ "$enabled" = "0" ] && enabled=false || enabled=true
+        proto="$(normalize_proto_read "$(uci_get firewall.$sec.proto)")"
+        printf '{"index":%s,"name":' "$idx"; q "$(uci_get firewall.$sec.name)"
+        printf ',"enabled":%s,"src":' "$enabled"; q "$(uci_get firewall.$sec.src)"
+        printf ',"src_port":'; q "$(uci_get firewall.$sec.src_dport)"
+        printf ',"dest":'; q "$(uci_get firewall.$sec.dest)"
+        printf ',"dest_ip":'; q "$(uci_get firewall.$sec.dest_ip)"
+        printf ',"dest_port":'; q "$(uci_get firewall.$sec.dest_port)"
+        printf ',"proto":'; q "$proto"
+        printf '}'
+        idx=$((idx + 1))
+    done
+
+    printf '],"rules":['
+    first=1
+    idx=0
+    for sec in $(uci -q show firewall 2>/dev/null | sed -n 's/^firewall\.\(@rule\[[0-9][0-9]*\]\)=rule$/\1/p'); do
+        [ "$first" = "1" ] || printf ','
+        first=0
+        enabled="$(uci_get firewall.$sec.enabled)"; [ "$enabled" = "0" ] && enabled=false || enabled=true
+        printf '{"index":%s,"name":' "$idx"; q "$(uci_get firewall.$sec.name)"
+        printf ',"enabled":%s,"src":' "$enabled"; q "$(uci_get firewall.$sec.src)"
+        printf ',"dest":'; q "$(uci_get firewall.$sec.dest)"
+        printf ',"proto":'; q "$(uci_get firewall.$sec.proto)"
+        printf ',"src_port":'; q "$(uci_get firewall.$sec.src_port)"
+        printf ',"dest_port":'; q "$(uci_get firewall.$sec.dest_port)"
+        printf ',"target":'; q "$(uci_get firewall.$sec.target)"
+        printf '}'
+        idx=$((idx + 1))
+    done
+    printf ']}\n'
+}
+
+cmd_firewall_add_redirect() {
+    name="$(decode_b64 "$1")"
+    src_port="$2"
+    dest_ip="$3"
+    dest_port="$4"
+    proto="$(normalize_proto_write "$5")"
+    enabled="$6"
+
+    [ -n "$name" ] || name="OpenWrt Manager"
+    valid_port_spec "$src_port" && valid_ipv4 "$dest_ip" && valid_port_spec "$dest_port" || {
+        echo '{"ok":false,"error":"invalid redirect"}'
+        exit 2
+    }
+
+    sec="$(uci add firewall redirect)"
+    uci set "firewall.$sec.name=$name"
+    uci set "firewall.$sec.src=wan"
+    uci set "firewall.$sec.src_dport=$src_port"
+    uci set "firewall.$sec.dest=lan"
+    uci set "firewall.$sec.dest_ip=$dest_ip"
+    uci set "firewall.$sec.dest_port=$dest_port"
+    uci set "firewall.$sec.proto=$proto"
+    uci set "firewall.$sec.target=DNAT"
+    [ "$enabled" = "1" ] && uci set "firewall.$sec.enabled=1" || uci set "firewall.$sec.enabled=0"
+    uci commit firewall
+    echo '{"ok":true}'
+}
+
+cmd_firewall_set_redirect() {
+    idx="$1"
+    name="$(decode_b64 "$2")"
+    src_port="$3"
+    dest_ip="$4"
+    dest_port="$5"
+    proto="$(normalize_proto_write "$6")"
+    enabled="$7"
+
+    valid_rule_index "$idx" || exit 2
+    sec="@redirect[$idx]"
+    [ "$(uci -q get "firewall.$sec")" = "redirect" ] || { echo '{"ok":false,"error":"redirect not found"}'; exit 3; }
+    valid_port_spec "$src_port" && valid_ipv4 "$dest_ip" && valid_port_spec "$dest_port" || {
+        echo '{"ok":false,"error":"invalid redirect"}'
+        exit 4
+    }
+
+    uci set "firewall.$sec.name=$name"
+    uci set "firewall.$sec.src=wan"
+    uci set "firewall.$sec.src_dport=$src_port"
+    uci set "firewall.$sec.dest=lan"
+    uci set "firewall.$sec.dest_ip=$dest_ip"
+    uci set "firewall.$sec.dest_port=$dest_port"
+    uci set "firewall.$sec.proto=$proto"
+    uci set "firewall.$sec.target=DNAT"
+    [ "$enabled" = "1" ] && uci set "firewall.$sec.enabled=1" || uci set "firewall.$sec.enabled=0"
+    uci commit firewall
+    echo '{"ok":true}'
+}
+
+cmd_firewall_delete_redirect() {
+    idx="$1"
+    valid_rule_index "$idx" || exit 2
+    sec="@redirect[$idx]"
+    [ "$(uci -q get "firewall.$sec")" = "redirect" ] || { echo '{"ok":false,"error":"redirect not found"}'; exit 3; }
+    uci delete "firewall.$sec"
+    uci commit firewall
+    echo '{"ok":true}'
+}
+
+cmd_firewall_toggle_rule() {
+    idx="$1"
+    enabled="$2"
+    valid_rule_index "$idx" || exit 2
+    sec="@rule[$idx]"
+    [ "$(uci -q get "firewall.$sec")" = "rule" ] || { echo '{"ok":false,"error":"rule not found"}'; exit 3; }
+    [ "$enabled" = "1" ] && uci set "firewall.$sec.enabled=1" || uci set "firewall.$sec.enabled=0"
+    uci commit firewall
     echo '{"ok":true}'
 }
 
