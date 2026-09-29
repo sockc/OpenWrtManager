@@ -117,7 +117,10 @@ fun PackageManagerScreen(
         }
 
         Spacer(Modifier.height(8.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        LazyColumn(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
             items(packages, key = { it.name }) { pkg ->
                 PackageCard(
                     pkg = pkg,
