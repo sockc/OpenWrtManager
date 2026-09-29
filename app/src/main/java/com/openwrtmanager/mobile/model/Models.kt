@@ -173,3 +173,27 @@ data class FirewallSnapshot(
     val redirects: List<PortForwardRule> = emptyList(),
     val rules: List<TrafficRule> = emptyList()
 )
+
+
+data class PackageManagerStatus(
+    val manager: String = "",
+    val installedCount: Int = 0,
+    val upgradableCount: Int = 0,
+    val overlayFreeKb: Long = 0
+)
+
+data class PackageInfo(
+    val name: String,
+    val version: String = "",
+    val availableVersion: String = "",
+    val description: String = "",
+    val installed: Boolean = false,
+    val upgradable: Boolean = false,
+    val protected: Boolean = false
+)
+
+data class BackupInfo(
+    val filename: String,
+    val sizeBytes: Long,
+    val includesPackageList: Boolean = true
+)
