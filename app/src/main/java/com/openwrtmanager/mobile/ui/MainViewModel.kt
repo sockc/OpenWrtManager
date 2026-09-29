@@ -387,19 +387,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun installQosBackend() = viewModelScope.launch {
         task {
-            _devicePolicyMessage.value = "正在安装 nft-qos…"
-            val updateResult = runCatching { agent.updatePackageLists() }
-            if (updateResult.isFailure) {
-                _devicePolicyMessage.value = "软件源更新失败，继续尝试安装 nft-qos"
-            }
-            agent.installPackage("nft-qos")
-            runCatching { agent.serviceAction("nft-qos", "enable") }
-            runCatching { agent.serviceAction("nft-qos", "start") }
-            delay(1500)
+            _devicePolicyMessage.value = "正在检测原生 nftables 限速能力…"
             _qosCapability.value = agent.qosCapability()
             _devicePolicyMessage.value =
-                if (_qosCapability.value.available) "nft-qos 已安装，可以设置单设备限速"
-                else _qosCapability.value.detail.ifBlank { "nft-qos 已安装，但当前不可用" }
+                if (_qosCapability.value.available) "原生 nftables 限速可用，无需安装额外软件包"
+                else _qosCapability.value.detail.ifBlank { "当前固件不支持所需的 nftables MAC 限速规则" }
         }
     }
 
