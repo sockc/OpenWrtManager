@@ -15,6 +15,7 @@ fun ManagerScaffold(vm: MainViewModel) {
     var tab by remember { mutableStateOf(Tab.HOME) }
     val agentInstalled by vm.agentInstalled.collectAsState()
     val packageRequest by vm.packageManagerRequest.collectAsState()
+    val appPanel by vm.appPanel.collectAsState()
 
     LaunchedEffect(packageRequest) {
         if (!packageRequest.isNullOrBlank()) tab = Tab.MORE
@@ -22,8 +23,9 @@ fun ManagerScaffold(vm: MainViewModel) {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                Tab.entries.forEach { item ->
+            if (!appPanel.open && !appPanel.opening) {
+                NavigationBar {
+                    Tab.entries.forEach { item ->
                     val icon = when(item) {
                         Tab.HOME -> Icons.Default.Home
                         Tab.DEVICES -> Icons.Default.Devices
@@ -31,12 +33,13 @@ fun ManagerScaffold(vm: MainViewModel) {
                         Tab.SERVICES -> Icons.Default.Build
                         Tab.MORE -> Icons.Default.MoreHoriz
                     }
-                    NavigationBarItem(
-                        selected = tab == item,
-                        onClick = { tab = item },
-                        icon = { Icon(icon, null) },
-                        label = { Text(item.title) }
-                    )
+                        NavigationBarItem(
+                            selected = tab == item,
+                            onClick = { tab = item },
+                            icon = { Icon(icon, null) },
+                            label = { Text(item.title) }
+                        )
+                    }
                 }
             }
         }
