@@ -374,12 +374,12 @@ private fun DevicePolicyDialog(
 
                 HorizontalDivider()
                 Text("单设备限速", style = MaterialTheme.typography.titleMedium)
-                Text(qosCapability.detail.ifBlank { "正在检测 nft-qos…" }, style = MaterialTheme.typography.bodySmall)
+                Text(qosCapability.detail.ifBlank { "正在检测原生 nftables…" }, style = MaterialTheme.typography.bodySmall)
 
                 if (!qosCapability.available) {
-                    Button(onClick = vm::installQosBackend) { Text("安装 nft-qos") }
+                    Button(onClick = vm::installQosBackend) { Text("重新检测 nftables") }
                     Text(
-                        "限速后端不会静默安装。安装完成后才允许启用单设备限速。",
+                        "V0.1.9 已改为直接使用 Kwrt/OpenWrt 自带 nftables，不再依赖 nft-qos 软件包。",
                         style = MaterialTheme.typography.bodySmall
                     )
                 } else {
@@ -413,7 +413,7 @@ private fun DevicePolicyDialog(
                         enabled = !qosEnabled || (downKbps >= 128 && upKbps >= 128)
                     ) { Text("保存限速") }
                     Text(
-                        "使用 nft-qos 的 MAC 限速；本版不修改全局 WAN SQM。",
+                        "使用原生 nftables 的 MAC 限速；本版不修改全局 WAN SQM，也不安装额外 QoS 软件包。",
                         style = MaterialTheme.typography.bodySmall
                     )
                 }
