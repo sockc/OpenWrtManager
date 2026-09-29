@@ -130,8 +130,8 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 
 - Device aliases are stored separately from DHCP hostnames, so users can use friendly names without forcing them into DNS hostname syntax.
 - Static IPv4 leases are written through OpenWrt UCI `dhcp host` sections with duplicate-IP protection.
-- Per-device bandwidth limits use the existing `nft-qos` package when available. The app offers an explicit install action and does not silently install QoS packages.
-- V0.1.9 uses nft-qos MAC-based client rules and keeps global WAN/SQM configuration untouched.
+- Per-device bandwidth limits use native nftables MAC rules on compatible firmware; the app validates rules before applying them and does not require the unavailable `nft-qos` package.
+- V0.1.9 keeps global WAN/SQM configuration untouched.
 - Scheduled internet blocking is implemented through OpenWrt cron and router-side block/unblock commands. Overnight windows such as 22:00-07:00 are supported.
 - Manual blocking and scheduled blocking are tracked separately, so a schedule ending cannot accidentally cancel a manual block.
 - Device aliases, schedules, and block state under `/etc/openwrt-manager/` are added to `/etc/sysupgrade.conf` so standard OpenWrt configuration backups preserve them.
@@ -146,3 +146,14 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Panel-only features such as Wake on LAN or custom public-HTTPS configuration pages can still appear through dynamic LuCI menu discovery even when there is no long-running init.d service.
 - Management panels open inside the Android app through an SSH local port forward to the router's local uhttpd listener. WebView traffic does not need to expose the LuCI HTTP service directly on the LAN.
 - HTTPS certificate errors are only accepted for the tunnel's local `127.0.0.1` endpoint; SSH host-key verification remains the transport trust boundary.
+
+
+## V0.2.1 Application Control Center Refinement
+
+- Application cards now expose package version, package name, PID, memory, process uptime, listening ports, autostart state and panel type when those values are available.
+- The router agent can detect standalone local Web UIs from actual listening ports in addition to LuCI menu entries. DDNS-Go and AdGuard Home receive explicit standalone-WebUI handling, while third-party init.d services can be auto-discovered when a real HTTP(S)-like listener is present.
+- Application PID ownership prefers the actual procd/ubus service PID and app-specific command-line evidence, avoiding shared-core-process attribution wherever possible.
+- The embedded panel adds back/forward navigation, loading progress, tunnel rebuild, one automatic retry on main-frame transport failure, and blocks navigation outside the local SSH tunnel.
+- Application details include management panel, service state, version, package, PID, memory, uptime, ports and init.d name.
+- Stopping a running application requires confirmation because proxy/DNS/network services may affect connectivity; restart remains a direct action.
+- Per-application logs support 100, 300 and 1000 line windows with manual refresh.
