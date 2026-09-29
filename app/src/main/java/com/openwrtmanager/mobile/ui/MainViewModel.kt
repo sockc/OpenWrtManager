@@ -142,6 +142,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshProcesses() = viewModelScope.launch { task { _processes.value = agent.processes() } }
 
     fun loadServiceLogs(name: String) = viewModelScope.launch {
+        _serviceLogs.value = ""
         task { _serviceLogs.value = sanitize(agent.serviceLogs(name)) }
     }
     fun refreshLogs() = viewModelScope.launch { task { _logs.value = sanitize(agent.logs()) } }
