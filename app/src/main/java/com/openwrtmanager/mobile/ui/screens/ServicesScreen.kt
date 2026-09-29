@@ -61,3 +61,39 @@ private fun ServiceCard(s: ServiceInfo, vm: MainViewModel) {
         }
     }
 }
+
+
+@Composable
+private fun AppServiceList(items: List<AppServiceInfo>) {
+    if (items.isEmpty()) {
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp)) {
+                Text("未识别到应用服务", style = MaterialTheme.typography.titleMedium)
+                Text("当前识别常见代理、组网、DNS、容器、文件共享与 DDNS 服务。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+        return
+    }
+
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(items, key = { it.id + ":" + it.initService }) { s ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(s.displayName, style = MaterialTheme.typography.titleMedium)
+                        Text(if (s.running) "正常" else "已停止")
+                    }
+                    Text(s.detail, style = MaterialTheme.typography.bodySmall)
+                    val meta = buildList {
+                        s.pid?.let { add("PID " + it) }
+                        s.memoryKb?.let { add(formatKb(it)) }
+                        if (s.enabled) add("开机自启")
+                    }
+                    if (meta.isNotEmpty()) {
+                        Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
+}
