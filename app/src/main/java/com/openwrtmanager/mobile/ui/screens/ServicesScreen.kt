@@ -25,10 +25,20 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             Column { Text("服务中心", style = MaterialTheme.typography.headlineSmall); Text("应用服务 · 系统服务 · 进程", style = MaterialTheme.typography.bodySmall) }
             TextButton(onClick = vm::refreshServices) { Text("刷新") }
         }
-        OutlinedTextField(query, { query = it }, label = { Text("搜索服务") }, modifier = Modifier.fillMaxWidth())
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FilterChip(selected = section == "apps", onClick = { section = "apps"; query = "" }, label = { Text("应用服务") })
+            FilterChip(selected = section == "system", onClick = { section = "system"; query = "" }, label = { Text("系统服务") })
+            FilterChip(selected = section == "processes", onClick = { section = "processes"; query = "" }, label = { Text("进程") })
+        }
         Spacer(Modifier.height(8.dp))
-        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(services.filter { it.name.contains(query, true) }, key = { it.name }) { s -> ServiceCard(s, vm) }
+        OutlinedTextField(query, { query = it }, label = { Text("搜索") }, modifier = Modifier.fillMaxWidth())
+        Spacer(Modifier.height(8.dp))
+        when (section) {
+            "apps" -> AppServiceList(appServices.filter { it.displayName.contains(query, true) || it.id.contains(query, true) })
+            "processes" -> ProcessList(processes.filter { it.name.contains(query, true) || it.command.contains(query, true) })
+            else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items(services.filter { it.name.contains(query, true) }, key = { it.name }) { s -> ServiceCard(s, vm) }
+            }
         }
     }
 }
