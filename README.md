@@ -93,3 +93,13 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Existing traffic rules are readable and can be enabled/disabled; full rule editing remains deferred.
 - Firewall zones are read-only in V0.1.5 to avoid accidental WAN/LAN isolation changes.
 - Every firewall mutation uses the existing 90-second Safe Apply transaction with router-side rollback.
+
+
+## V0.1.6 Package Manager and Backup
+
+- OPKG package manager UI for installed packages, repository search, install, individual upgrades, and removal.
+- Core/essential package protections are enforced in the router agent; V0.1.6 intentionally does not provide a bulk "upgrade all" action.
+- Package feed refresh and Overlay free-space status are shown in the app.
+- Standard OpenWrt configuration backups are generated with sysupgrade and exported to the Android document picker.
+- When supported, backups include the installed-package list via `sysupgrade -k -b`; older variants fall back to `sysupgrade -b`.
+- Restore accepts a selected OpenWrt `.tar.gz` backup, validates the archive and path layout, then uses `sysupgrade -r`. A reboot is required after restore.
