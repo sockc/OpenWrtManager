@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.3
+# OpenWrt Manager Agent V0.1.4
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.3"
+VERSION="0.1.4"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
@@ -247,6 +247,149 @@ cmd_services() {
     printf ']\n'
 }
 
+
+service_enabled() {
+    svc="$1"
+    [ -x "/etc/init.d/$svc" ] && "/etc/init.d/$svc" enabled >/dev/null 2>&1
+}
+
+service_running() {
+    svc="$1"
+    [ -x "/etc/init.d/$svc" ] || return 1
+    if ubus call service list "{\"name\":\"$svc\"}" 2>/dev/null | grep -q '"running"[[:space:]]*:[[:space:]]*true'; then
+        return 0
+    fi
+    "/etc/init.d/$svc" status >/dev/null 2>&1
+}
+
+first_pid_for() {
+    pattern="$1"
+    for d in /proc/[0-9]*; do
+        [ -r "$d/cmdline" ] || continue
+        cmd="$(tr '\000' ' ' < "$d/cmdline" 2>/dev/null)"
+        echo "$cmd" | grep -qi "$pattern" || continue
+        echo "${d##*/}"
+        return 0
+    done
+    return 1
+}
+
+pid_rss_kb() {
+    pid="$1"
+    awk '/^VmRSS:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null
+}
+
+pid_name() {
+    pid="$1"
+    cat "/proc/$pid/comm" 2>/dev/null | head -n1
+}
+
+pid_cmd() {
+    pid="$1"
+    tr '\000' ' ' < "/proc/$pid/cmdline" 2>/dev/null | sed 's/[[:space:]]*$//'
+}
+
+pid_user() {
+    pid="$1"
+    uid="$(awk '/^Uid:/{print $2; exit}' "/proc/$pid/status" 2>/dev/null)"
+    [ -n "$uid" ] || { printf ''; return; }
+    awk -F: -v u="$uid" '$3==u{print $1; exit}' /etc/passwd 2>/dev/null
+}
+
+is_protected_process() {
+    name="$1"
+    case "$name" in
+        init|procd|ubusd|netifd|dnsmasq|odhcpd|dropbear|uhttpd|firewall|fw4|logd|rpcd) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cmd_app_services() {
+    first=1
+    printf '['
+    emit_app_service() {
+        id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"
+        [ -x "/etc/init.d/$svc" ] || command -v "$pattern" >/dev/null 2>&1 || first_pid_for "$pattern" >/dev/null 2>&1 || return 0
+
+        service_running "$svc" && running=true || running=false
+        service_enabled "$svc" && enabled=true || enabled=false
+        pid="$(first_pid_for "$pattern" 2>/dev/null || true)"
+        rss=""
+        [ -n "$pid" ] && rss="$(pid_rss_kb "$pid")"
+        [ "$running" = "true" ] && health="healthy" || health="stopped"
+
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"id":'; q "$id"
+        printf ',"display_name":'; q "$label"
+        printf ',"init_service":'; q "$svc"
+        printf ',"running":%s,"enabled":%s' "$running" "$enabled"
+        printf ',"health":'; q "$health"
+        printf ',"version":""'
+        printf ',"pid":'
+        [ -n "$pid" ] && printf '%s' "$pid" || printf 'null'
+        printf ',"cpu_percent":null'
+        printf ',"memory_kb":'
+        [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
+        printf ',"ports":[]'
+        printf ',"detail":'; q "$detail"
+        printf '}'
+    }
+
+    emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务"
+    emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务"
+    emit_app_service "mihomo" "Mihomo" "mihomo" "mihomo" "代理核心"
+    emit_app_service "singbox" "sing-box" "sing-box" "sing-box" "代理核心"
+    emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务"
+    emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤"
+    emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务"
+    emit_app_service "samba" "Samba" "samba4" "smbd" "文件共享"
+    emit_app_service "ddns" "DDNS" "ddns" "ddns" "动态域名"
+
+    printf ']\n'
+}
+
+cmd_processes() {
+    total_kb="$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)"
+    [ -n "$total_kb" ] || total_kb=1
+
+    first=1
+    printf '['
+    count=0
+    for d in /proc/[0-9]*; do
+        [ -r "$d/status" ] || continue
+        pid="${d##*/}"
+        name="$(pid_name "$pid")"
+        [ -n "$name" ] || continue
+        user="$(pid_user "$pid")"
+        rss="$(pid_rss_kb "$pid")"; [ -n "$rss" ] || rss=0
+        cmd="$(pid_cmd "$pid")"
+        is_protected_process "$name" && protected=true || protected=false
+        mempct="$(awk -v r="$rss" -v t="$total_kb" 'BEGIN{printf "%.2f", (t>0?r*100/t:0)}')"
+
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"pid":%s,"name":' "$pid"; q "$name"
+        printf ',"user":'; q "$user"
+        printf ',"cpu_percent":0.0,"memory_percent":%s,"rss_kb":%s' "$mempct" "$rss"
+        printf ',"command":'; q "$cmd"
+        printf ',"protected":%s}' "$protected"
+
+        count=$((count + 1))
+        [ "$count" -ge 160 ] && break
+    done
+    printf ']\n'
+}
+
+cmd_service_logs() {
+    name="${1:-}"
+    lines="${2:-120}"
+    valid_name "$name" || exit 2
+    case "$lines" in *[!0-9]*) lines=120;; esac
+    [ "$lines" -gt 300 ] && lines=300
+    logread 2>/dev/null | grep -i "$name" | tail -n "$lines"
+}
+
 cmd_block() {
     mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
     sec="$(rule_name "$mac")"
@@ -295,6 +438,9 @@ case "${1:-}" in
     network) cmd_network ;;
     wifi) cmd_wifi ;;
     services) cmd_services ;;
+    app-services) cmd_app_services ;;
+    processes) cmd_processes ;;
+    service-logs) cmd_service_logs "${2:-}" "${3:-120}" ;;
     logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
     block) cmd_block "${2:-}" ;;
     unblock) cmd_unblock "${2:-}" ;;
