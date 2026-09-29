@@ -166,6 +166,12 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             },
             onToggleEnabled = {
                 vm.appServiceAction(service, if (service.enabled) "disable" else "enable")
+            },
+            onPackage = {
+                if (service.packageName.isNotBlank()) {
+                    detailService = null
+                    vm.openPackageManagerFor(service.packageName)
+                }
             }
         )
     }
@@ -394,7 +400,8 @@ private fun AppDetailDialog(
     onLogs: () -> Unit,
     onRestart: () -> Unit,
     onStop: () -> Unit,
-    onToggleEnabled: () -> Unit
+    onToggleEnabled: () -> Unit,
+    onPackage: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = onClose,
@@ -415,7 +422,10 @@ private fun AppDetailDialog(
                     }
                 )
                 if (service.version.isNotBlank()) DetailRow("版本", service.version)
-                if (service.packageName.isNotBlank()) DetailRow("软件包", service.packageName)
+                if (service.packageName.isNotBlank()) {
+                    DetailRow("软件包", service.packageName)
+                    TextButton(onClick = onPackage) { Text("在软件包管理中查看") }
+                }
                 service.pid?.let { DetailRow("PID", it.toString()) }
                 service.memoryKb?.let { DetailRow("内存", formatKb(it)) }
                 service.uptimeSeconds?.let { DetailRow("运行时间", formatUptime(it)) }
