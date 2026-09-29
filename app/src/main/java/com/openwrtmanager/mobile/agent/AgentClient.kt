@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.9" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.2.0" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -673,7 +673,12 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         cpuPercent = if (o.isNull("cpu_percent")) null else o.optDouble("cpu_percent"),
                         memoryKb = if (o.isNull("memory_kb")) null else o.optLong("memory_kb"),
                         ports = ports,
-                        detail = o.optString("detail")
+                        detail = o.optString("detail"),
+                        panelAvailable = o.optBoolean("panel_available", false),
+                        panelPath = o.optString("panel_path"),
+                        panelPort = o.optInt("panel_port"),
+                        panelScheme = o.optString("panel_scheme", "http"),
+                        panelKind = o.optString("panel_kind")
                     )
                 )
             }

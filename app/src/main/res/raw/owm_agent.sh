@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.9
+# OpenWrt Manager Agent V0.2.0
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.9"
+VERSION="0.2.0"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SCHEDULE_BLOCKED="$BASE/scheduled_blocked_macs"
@@ -523,20 +523,133 @@ is_protected_process() {
     esac
 }
 
-cmd_app_services() {
-    first=1
-    printf '['
-    emit_app_service() {
-        id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"
-        [ -x "/etc/init.d/$svc" ] || command -v "$pattern" >/dev/null 2>&1 || first_pid_for "$pattern" >/dev/null 2>&1 || return 0
+luci_slug_exists() {
+    slug="$1"
+    for file in /usr/share/luci/menu.d/*.json; do
+        [ -f "$file" ] || continue
+        grep -q "\"admin/services/$slug\"" "$file" 2>/dev/null && return 0
+    done
+    return 1
+}
 
-        pid="$(first_pid_for "$pattern" 2>/dev/null || true)"
-        if service_running "$svc" || [ -n "$pid" ]; then running=true; else running=false; fi
-        service_enabled "$svc" && enabled=true || enabled=false
-        [ -x "/etc/init.d/$svc" ] && controllable=true || controllable=false
+luci_title_for_slug() {
+    slug="$1"
+    case "$slug" in
+        homeproxy) printf '%s' "HomeProxy"; return ;;
+        mosdns) printf '%s' "MosDNS"; return ;;
+        nikki) printf '%s' "Nikki"; return ;;
+        ddns-go|ddns_go) printf '%s' "DDNS-Go"; return ;;
+        wol|wakeonlan|wake-on-lan) printf '%s' "Wake on LAN"; return ;;
+        nezha|nezha-agent|nezha_agent) printf '%s' "Nezha Agent"; return ;;
+        upnp|miniupnpd) printf '%s' "UPnP IGD 和 PCP"; return ;;
+        openclash) printf '%s' "OpenClash"; return ;;
+        passwall) printf '%s' "PassWall"; return ;;
+        passwall2) printf '%s' "PassWall2"; return ;;
+        adguardhome) printf '%s' "AdGuard Home"; return ;;
+        smartdns) printf '%s' "SmartDNS"; return ;;
+    esac
+
+    if command -v jsonfilter >/dev/null 2>&1; then
+        for file in /usr/share/luci/menu.d/*.json; do
+            [ -f "$file" ] || continue
+            grep -q ""admin/services/$slug"" "$file" 2>/dev/null || continue
+            title="$(jsonfilter -i "$file" -e "@[\"admin/services/$slug\"].title" 2>/dev/null | head -n1)"
+            if [ -n "$title" ]; then
+                printf '%s' "$title"
+                return
+            fi
+        done
+    fi
+
+    printf '%s' "$slug"
+}
+
+luci_endpoint() {
+    scheme="http"
+    port="80"
+
+    https_list="$(uci -q get uhttpd.main.listen_https 2>/dev/null)"
+    if [ -n "$https_list" ]; then
+        for addr in $https_list; do
+            p="${addr##*:}"
+            p="$(printf '%s' "$p" | tr -cd '0-9')"
+            if [ -n "$p" ]; then
+                scheme="https"
+                port="$p"
+                printf '%s %s' "$scheme" "$port"
+                return
+            fi
+        done
+    fi
+
+    http_list="$(uci -q get uhttpd.main.listen_http 2>/dev/null)"
+    if [ -n "$http_list" ]; then
+        for addr in $http_list; do
+            p="${addr##*:}"
+            p="$(printf '%s' "$p" | tr -cd '0-9')"
+            if [ -n "$p" ]; then
+                port="$p"
+                break
+            fi
+        done
+    fi
+
+    printf '%s %s' "$scheme" "$port"
+}
+
+service_installed_evidence() {
+    id="$1"; svc="$2"; slug="$3"
+    [ -n "$svc" ] && [ -x "/etc/init.d/$svc" ] && return 0
+    [ -f "/etc/config/$id" ] && return 0
+    [ -n "$svc" ] && [ -f "/etc/config/$svc" ] && return 0
+    [ -n "$slug" ] && luci_slug_exists "$slug" && return 0
+    opkg status "luci-app-$id" 2>/dev/null | grep -q '^Status: .* installed' && return 0
+    opkg status "$id" 2>/dev/null | grep -q '^Status: .* installed' && return 0
+    return 1
+}
+
+cmd_app_services() {
+    set -- $(luci_endpoint)
+    luci_scheme="${1:-http}"
+    luci_port="${2:-80}"
+    seen="|"
+    first=1
+
+    emit_app_service() {
+        id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"; slug="$6"
+        service_installed_evidence "$id" "$svc" "$slug" || return 0
+
+        pid=""
+        [ -n "$pattern" ] && pid="$(first_pid_for "$pattern" 2>/dev/null || true)"
+        if [ -n "$svc" ] && service_running "$svc"; then
+            running=true
+        elif [ -n "$pid" ]; then
+            running=true
+        else
+            running=false
+        fi
+
+        if [ -n "$svc" ]; then
+            service_enabled "$svc" && enabled=true || enabled=false
+            [ -x "/etc/init.d/$svc" ] && controllable=true || controllable=false
+        else
+            enabled=false
+            controllable=false
+        fi
+
         rss=""
         [ -n "$pid" ] && rss="$(pid_rss_kb "$pid")"
         [ "$running" = "true" ] && health="healthy" || health="stopped"
+
+        panel_available=false
+        panel_path=""
+        panel_kind=""
+        if [ -n "$slug" ] && luci_slug_exists "$slug"; then
+            panel_available=true
+            panel_path="/cgi-bin/luci/admin/services/$slug"
+            panel_kind="luci"
+            seen="${seen}${slug}|"
+        fi
 
         [ $first -eq 1 ] || printf ','
         first=0
@@ -553,25 +666,65 @@ cmd_app_services() {
         [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
         printf ',"ports":[]'
         printf ',"detail":'; q "$detail"
+        printf ',"panel_available":%s' "$panel_available"
+        printf ',"panel_path":'; q "$panel_path"
+        printf ',"panel_port":%s' "$luci_port"
+        printf ',"panel_scheme":'; q "$luci_scheme"
+        printf ',"panel_kind":'; q "$panel_kind"
         printf '}'
     }
 
-    emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务"
-    emit_app_service "nikki" "Nikki" "nikki" "mihomo" "代理服务"
-    emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务"
-    emit_app_service "passwall2" "PassWall2" "passwall2" "sing-box" "代理服务"
-    emit_app_service "homeproxy" "HomeProxy" "homeproxy" "sing-box" "代理服务"
-    emit_app_service "mihomo" "Mihomo" "mihomo" "mihomo" "代理核心"
-    emit_app_service "singbox" "sing-box" "sing-box" "sing-box" "代理核心"
-    emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务"
-    emit_app_service "zerotier" "ZeroTier" "zerotier" "zerotier-one" "组网服务"
-    emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤"
-    emit_app_service "smartdns" "SmartDNS" "smartdns" "smartdns" "DNS 服务"
-    emit_app_service "mosdns" "MosDNS" "mosdns" "mosdns" "DNS 服务"
-    emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务"
-    emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享"
-    emit_app_service "samba" "Samba" "samba" "smbd" "文件共享"
-    emit_app_service "ddns" "DDNS" "ddns" "ddns" "动态域名"
+    emit_panel_only() {
+        slug="$1"
+        case "$seen" in *"|$slug|"*) return 0 ;; esac
+        label="$(luci_title_for_slug "$slug")"
+        seen="${seen}${slug}|"
+
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"id":'; q "panel-$slug"
+        printf ',"display_name":'; q "$label"
+        printf ',"init_service":""'
+        printf ',"controllable":false,"running":true,"enabled":false'
+        printf ',"health":"panel","version":"","pid":null,"cpu_percent":null,"memory_kb":null,"ports":[]'
+        printf ',"detail":"LuCI 功能面板"'
+        printf ',"panel_available":true'
+        printf ',"panel_path":'; q "/cgi-bin/luci/admin/services/$slug"
+        printf ',"panel_port":%s' "$luci_port"
+        printf ',"panel_scheme":'; q "$luci_scheme"
+        printf ',"panel_kind":"luci"}'
+    }
+
+    printf '['
+
+    emit_app_service "nikki" "Nikki" "nikki" "mihomo" "代理服务" "nikki"
+    emit_app_service "homeproxy" "HomeProxy" "homeproxy" "sing-box" "代理服务" "homeproxy"
+    emit_app_service "mosdns" "MosDNS" "mosdns" "mosdns" "DNS 服务" "mosdns"
+    emit_app_service "ddns-go" "DDNS-Go" "ddns-go" "ddns-go" "动态域名" "ddns-go"
+    emit_app_service "nezha-agent" "Nezha Agent" "nezha-agent" "nezha-agent" "监控探针" "nezha-agent"
+    emit_app_service "miniupnpd" "UPnP IGD 和 PCP" "miniupnpd" "miniupnpd" "UPnP / PCP 服务" "upnp"
+    emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务" "openclash"
+    emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务" "passwall"
+    emit_app_service "passwall2" "PassWall2" "passwall2" "sing-box" "代理服务" "passwall2"
+    emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤" "adguardhome"
+    emit_app_service "smartdns" "SmartDNS" "smartdns" "smartdns" "DNS 服务" "smartdns"
+    emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务" ""
+    emit_app_service "zerotier" "ZeroTier" "zerotier" "zerotier-one" "组网服务" ""
+    emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务" ""
+    emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享" ""
+    emit_app_service "samba" "Samba" "samba" "smbd" "文件共享" ""
+
+    for file in /usr/share/luci/menu.d/*.json; do
+        [ -f "$file" ] || continue
+        grep -o '"admin/services/[^"]*"' "$file" 2>/dev/null | tr -d '"' | while IFS= read -r route; do
+            slug="${route#admin/services/}"
+            slug="${slug%%/*}"
+            [ -n "$slug" ] || continue
+            printf '%s\n' "$slug"
+        done
+    done | sort -u | while IFS= read -r slug; do
+        emit_panel_only "$slug"
+    done
 
     printf ']\n'
 }

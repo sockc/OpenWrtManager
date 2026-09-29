@@ -135,6 +135,23 @@ class SshManager(private val secureStore: SecureStore) {
             }
         }
 
+    suspend fun openLocalForward(remoteHost: String, remotePort: Int): Int =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
+                require(remotePort in 1..65535) { "远端端口无效" }
+                s.setPortForwardingL(0, remoteHost, remotePort)
+            }
+        }
+
+    suspend fun closeLocalForward(localPort: Int) =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val s = session?.takeIf { it.isConnected } ?: return@withContext
+                runCatching { s.delPortForwardingL(localPort) }
+            }
+        }
+
     fun isConnected(): Boolean = session?.isConnected == true
 
     fun disconnect() {

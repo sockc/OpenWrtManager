@@ -91,6 +91,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val processes: StateFlow<List<ProcessInfo>> = _processes.asStateFlow()
     private val _serviceLogs = MutableStateFlow("")
     val serviceLogs: StateFlow<String> = _serviceLogs.asStateFlow()
+    private val _appPanel = MutableStateFlow(AppPanelState())
+    val appPanel: StateFlow<AppPanelState> = _appPanel.asStateFlow()
     private val _logs = MutableStateFlow("")
     val logs: StateFlow<String> = _logs.asStateFlow()
     private val _terminalOutput = MutableStateFlow("")
@@ -147,6 +149,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         previousDeviceTraffic = emptyMap()
         previousDeviceTrafficAtMs = 0
         _networkConfig.value = null
+        _appPanel.value = AppPanelState()
         _safeApply.value = SafeApplyState()
         stopRealtimeMonitoring()
         _traffic.value = TrafficSnapshot()
@@ -297,7 +300,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         return buildString {
             appendLine("OpenWrt Manager Diagnostic Report")
-            appendLine("App: 0.1.9")
+            appendLine("App: 0.2.0")
             appendLine()
             appendLine("[System]")
             appendLine("Model: ${s?.model.orEmpty()}")
@@ -633,6 +636,47 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             agent.restoreBackup(bytes)
             _backupMessage.value = "配置已恢复，重启路由器后生效"
         }
+    }
+
+
+    fun openAppPanel(service: AppServiceInfo) = viewModelScope.launch {
+        if (!service.panelAvailable || service.panelPort !in 1..65535 || service.panelPath.isBlank()) {
+            _appPanel.value = AppPanelState(error = "该应用没有可用的管理面板")
+            return@launch
+        }
+
+        val oldPort = _appPanel.value.localPort
+        _appPanel.value = AppPanelState(
+            opening = true,
+            serviceId = service.id,
+            title = service.displayName
+        )
+
+        try {
+            if (oldPort > 0) runCatching { ssh.closeLocalForward(oldPort) }
+            val localPort = ssh.openLocalForward("127.0.0.1", service.panelPort)
+            val scheme = if (service.panelScheme.equals("https", true)) "https" else "http"
+            val path = if (service.panelPath.startsWith("/")) service.panelPath else "/" + service.panelPath
+            _appPanel.value = AppPanelState(
+                open = true,
+                serviceId = service.id,
+                title = service.displayName,
+                url = "$scheme://127.0.0.1:$localPort$path",
+                localPort = localPort
+            )
+        } catch (t: Throwable) {
+            _appPanel.value = AppPanelState(
+                serviceId = service.id,
+                title = service.displayName,
+                error = t.message ?: t.javaClass.simpleName
+            )
+        }
+    }
+
+    fun closeAppPanel() = viewModelScope.launch {
+        val port = _appPanel.value.localPort
+        _appPanel.value = AppPanelState()
+        if (port > 0) runCatching { ssh.closeLocalForward(port) }
     }
 
     fun refreshServices() = viewModelScope.launch {
