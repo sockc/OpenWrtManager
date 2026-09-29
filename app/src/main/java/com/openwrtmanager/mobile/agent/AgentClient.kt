@@ -260,6 +260,111 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
     }
 
 
+
+    suspend fun firewallSnapshot(): FirewallSnapshot {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-config firewall-list", 20_000))
+
+        val zones = buildList {
+            val a = o.optJSONArray("zones") ?: JSONArray()
+            for (i in 0 until a.length()) {
+                val z = a.optJSONObject(i) ?: continue
+                val networks = buildList {
+                    val n = z.optJSONArray("networks")
+                    if (n != null) for (j in 0 until n.length()) add(n.optString(j))
+                }
+                add(
+                    FirewallZone(
+                        name = z.optString("name"),
+                        input = z.optString("input"),
+                        output = z.optString("output"),
+                        forward = z.optString("forward"),
+                        masquerading = z.optBoolean("masquerading"),
+                        mtuFix = z.optBoolean("mtu_fix"),
+                        networks = networks
+                    )
+                )
+            }
+        }
+
+        val redirects = buildList {
+            val a = o.optJSONArray("redirects") ?: JSONArray()
+            for (i in 0 until a.length()) {
+                val r = a.optJSONObject(i) ?: continue
+                add(
+                    PortForwardRule(
+                        index = r.optInt("index"),
+                        name = r.optString("name"),
+                        enabled = r.optBoolean("enabled", true),
+                        src = r.optString("src", "wan"),
+                        srcPort = r.optString("src_port"),
+                        dest = r.optString("dest", "lan"),
+                        destIp = r.optString("dest_ip"),
+                        destPort = r.optString("dest_port"),
+                        proto = r.optString("proto", "tcp")
+                    )
+                )
+            }
+        }
+
+        val rules = buildList {
+            val a = o.optJSONArray("rules") ?: JSONArray()
+            for (i in 0 until a.length()) {
+                val r = a.optJSONObject(i) ?: continue
+                add(
+                    TrafficRule(
+                        index = r.optInt("index"),
+                        name = r.optString("name"),
+                        enabled = r.optBoolean("enabled", true),
+                        src = r.optString("src"),
+                        dest = r.optString("dest"),
+                        proto = r.optString("proto"),
+                        srcPort = r.optString("src_port"),
+                        destPort = r.optString("dest_port"),
+                        target = r.optString("target")
+                    )
+                )
+            }
+        }
+
+        return FirewallSnapshot(zones = zones, redirects = redirects, rules = rules)
+    }
+
+    suspend fun addPortForward(
+        name: String,
+        srcPort: String,
+        destIp: String,
+        destPort: String,
+        proto: String,
+        enabled: Boolean
+    ) {
+        ssh.exec(
+            "/usr/bin/owm-config firewall-add-redirect '${b64(name)}' '${safeToken(srcPort)}' " +
+                "'${safeToken(destIp)}' '${safeToken(destPort)}' '${safeToken(proto)}' " +
+                "'${if (enabled) "1" else "0"}'",
+            20_000
+        )
+    }
+
+    suspend fun updatePortForward(rule: PortForwardRule) {
+        ssh.exec(
+            "/usr/bin/owm-config firewall-set-redirect '${rule.index}' '${b64(rule.name)}' " +
+                "'${safeToken(rule.srcPort)}' '${safeToken(rule.destIp)}' '${safeToken(rule.destPort)}' " +
+                "'${safeToken(rule.proto)}' '${if (rule.enabled) "1" else "0"}'",
+            20_000
+        )
+    }
+
+    suspend fun deletePortForward(index: Int) {
+        ssh.exec("/usr/bin/owm-config firewall-delete-redirect '${index.coerceAtLeast(0)}'", 20_000)
+    }
+
+    suspend fun toggleTrafficRule(index: Int, enabled: Boolean) {
+        ssh.exec(
+            "/usr/bin/owm-config firewall-toggle-rule '${index.coerceAtLeast(0)}' '${if (enabled) "1" else "0"}'",
+            20_000
+        )
+    }
+
     suspend fun appServices(): List<AppServiceInfo> {
         val a = JSONArray(ssh.exec("/usr/bin/owm-agent app-services", 25_000))
         return buildList {
