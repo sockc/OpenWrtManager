@@ -186,6 +186,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         realtimeJob = viewModelScope.launch {
             var cycle = 0
             while (_connected.value) {
+                if (_busy.value) {
+                    delay(750)
+                    continue
+                }
                 runCatching { updateTrafficSample() }
                 if (cycle % 2 == 0) {
                     runCatching { _status.value = agent.status() }
@@ -384,11 +388,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun installQosBackend() = viewModelScope.launch {
         task {
             _devicePolicyMessage.value = "正在安装 nft-qos…"
-            runCatching { agent.updatePackageLists() }
+            val updateResult = runCatching { agent.updatePackageLists() }
+            if (updateResult.isFailure) {
+                _devicePolicyMessage.value = "软件源更新失败，继续尝试安装 nft-qos"
+            }
             agent.installPackage("nft-qos")
             runCatching { agent.serviceAction("nft-qos", "enable") }
             runCatching { agent.serviceAction("nft-qos", "start") }
-            delay(1200)
+            delay(1500)
             _qosCapability.value = agent.qosCapability()
             _devicePolicyMessage.value =
                 if (_qosCapability.value.available) "nft-qos 已安装，可以设置单设备限速"
@@ -431,6 +438,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         deviceTrafficJob = viewModelScope.launch {
             var cycle = 0
             while (_connected.value) {
+                if (_busy.value) {
+                    delay(750)
+                    continue
+                }
                 if (cycle % 5 == 0) {
                     runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
                     runCatching { _devices.value = agent.devices() }
