@@ -48,15 +48,15 @@ private fun ServiceCard(s: ServiceInfo, vm: MainViewModel) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(s.name, style = MaterialTheme.typography.titleMedium)
+                Column { Text(s.name, style = MaterialTheme.typography.titleMedium); if (s.protected) Text("核心服务 · 已启用保护", style = MaterialTheme.typography.bodySmall) }
                 Text(if (s.running) "运行中" else "已停止")
             }
             Text(if (s.enabled) "开机启动" else "未设为开机启动", style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { vm.serviceAction(s, if (s.running) "stop" else "start") }) { Text(if (s.running) "停止" else "启动") }
-                OutlinedButton(onClick = { vm.serviceAction(s, "restart") }) { Text("重启") }
-                TextButton(onClick = { vm.serviceAction(s, if (s.enabled) "disable" else "enable") }) { Text(if (s.enabled) "取消自启" else "设为自启") }
+                OutlinedButton(onClick = { vm.serviceAction(s, if (s.running) "stop" else "start") }, enabled = !s.protected || !s.running) { Text(if (s.running) "停止" else "启动") }
+                OutlinedButton(onClick = { vm.serviceAction(s, "restart") }, enabled = !s.protected) { Text("重启") }
+                TextButton(onClick = { vm.serviceAction(s, if (s.enabled) "disable" else "enable") }, enabled = !s.protected) { Text(if (s.enabled) "取消自启" else "设为自启") }
             }
         }
     }
