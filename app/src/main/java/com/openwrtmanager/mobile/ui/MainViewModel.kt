@@ -8,6 +8,7 @@ import com.openwrtmanager.mobile.data.SecureStore
 import com.openwrtmanager.mobile.model.*
 import com.openwrtmanager.mobile.ssh.SshManager
 import com.openwrtmanager.mobile.update.UpdateChecker
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,6 +38,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val network: StateFlow<NetworkSummary?> = _network.asStateFlow()
     private val _wifi = MutableStateFlow<List<WifiNetwork>>(emptyList())
     val wifi: StateFlow<List<WifiNetwork>> = _wifi.asStateFlow()
+    private val _networkConfig = MutableStateFlow<NetworkConfig?>(null)
+    val networkConfig: StateFlow<NetworkConfig?> = _networkConfig.asStateFlow()
+    private val _safeApply = MutableStateFlow(SafeApplyState())
+    val safeApply: StateFlow<SafeApplyState> = _safeApply.asStateFlow()
+
     private val _services = MutableStateFlow<List<ServiceInfo>>(emptyList())
     val services: StateFlow<List<ServiceInfo>> = _services.asStateFlow()
     private val _logs = MutableStateFlow("")
@@ -59,18 +65,22 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun connect(profile: RouterProfile) = viewModelScope.launch {
         task {
-            val fp = ssh.connect(profile).getOrThrow()
-            store.saveProfile(profile)
-            _fingerprint.value = fp
-            _connected.value = true
-            val installedVersion = agent.agentVersion()
-            _agentInstalled.value = installedVersion != null
-            if (_agentInstalled.value) {
-                if (installedVersion != AgentClient.BUNDLED_AGENT_VERSION) {
-                    agent.installAgent()
-                }
-                refreshCoreInternal()
-            }
+            connectInternal(profile)
+            refreshCoreInternal()
+            runCatching { _networkConfig.value = agent.config() }
+            runCatching { _safeApply.value = agent.safeStatus() }
+        }
+    }
+
+    private suspend fun connectInternal(profile: RouterProfile) {
+        val fp = ssh.connect(profile).getOrThrow()
+        store.saveProfile(profile)
+        _fingerprint.value = fp
+        _connected.value = true
+        val installedVersion = agent.agentVersion()
+        _agentInstalled.value = installedVersion != null
+        if (_agentInstalled.value && installedVersion != AgentClient.BUNDLED_AGENT_VERSION) {
+            agent.installAgent()
         }
     }
 
@@ -81,6 +91,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _network.value = null
         _wifi.value = emptyList()
         _devices.value = emptyList()
+        _networkConfig.value = null
+        _safeApply.value = SafeApplyState()
     }
 
     fun installAgent() = viewModelScope.launch {
@@ -88,6 +100,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             agent.installAgent()
             _agentInstalled.value = agent.agentVersion() != null
             refreshCoreInternal()
+            _networkConfig.value = agent.config()
         }
     }
 
@@ -101,7 +114,16 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun refreshDevices() = viewModelScope.launch { task { _devices.value = agent.devices() } }
-    fun refreshNetwork() = viewModelScope.launch { task { _network.value = agent.network(); _wifi.value = agent.wifi() } }
+
+    fun refreshNetwork() = viewModelScope.launch {
+        task {
+            _network.value = agent.network()
+            _wifi.value = agent.wifi()
+            _networkConfig.value = agent.config()
+            _safeApply.value = runCatching { agent.safeStatus() }.getOrDefault(SafeApplyState())
+        }
+    }
+
     fun refreshServices() = viewModelScope.launch { task { _services.value = agent.services() } }
     fun refreshLogs() = viewModelScope.launch { task { _logs.value = sanitize(agent.logs()) } }
 
@@ -115,15 +137,168 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _updateChecking.value = false
     }
 
+    fun applyWifi(
+        ifaceSection: String,
+        deviceSection: String,
+        enabled: Boolean,
+        ssid: String,
+        encryption: String,
+        password: String?,
+        channel: String,
+        htmode: String,
+        country: String
+    ) = safeApplyChange("wifi") {
+        agent.setWifi(
+            ifaceSection,
+            deviceSection,
+            enabled,
+            ssid,
+            encryption,
+            password,
+            channel,
+            htmode,
+            country
+        )
+    }
+
+    fun applyLan(ip: String, netmask: String) = viewModelScope.launch {
+        val profile = savedProfile ?: return@launch
+        _busy.value = true
+        _error.value = null
+        try {
+            val state = agent.safeBegin("network", 90)
+            _safeApply.value = state
+            agent.setLan(ip, netmask)
+            agent.applyConfig("network")
+            watchSafeApply(state)
+
+            if (profile.host != ip) {
+                ssh.disconnect()
+                _connected.value = false
+                delay(2500)
+                val newProfile = profile.copy(host = ip)
+                var connected = false
+                repeat(5) {
+                    if (!connected) {
+                        val result = ssh.connect(newProfile)
+                        if (result.isSuccess) {
+                            store.saveProfile(newProfile)
+                            _fingerprint.value = result.getOrNull()
+                            _connected.value = true
+                            connected = true
+                            runCatching { refreshCoreInternal() }
+                            runCatching { _networkConfig.value = agent.config() }
+                        } else {
+                            delay(2500)
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            _error.value = t.message ?: t.javaClass.simpleName
+        } finally {
+            _busy.value = false
+        }
+    }
+
+    fun applyDhcp(start: String, limit: String, lease: String) =
+        safeApplyChange("dhcp") { agent.setDhcp(start, limit, lease) }
+
+    fun applyDns(peer: Boolean, servers: List<String>) =
+        safeApplyChange("network") { agent.setDns(peer, servers) }
+
+    fun applyWan(
+        proto: String,
+        username: String,
+        password: String?,
+        ip: String,
+        netmask: String,
+        gateway: String,
+        mtu: String,
+        wan6Enabled: Boolean
+    ) = safeApplyChange("network") {
+        agent.setWan(proto, username, password, ip, netmask, gateway, mtu)
+        agent.setWan6(wan6Enabled)
+    }
+
+    private fun safeApplyChange(kind: String, setter: suspend () -> Unit) = viewModelScope.launch {
+        _busy.value = true
+        _error.value = null
+        try {
+            val state = agent.safeBegin(kind, 90)
+            _safeApply.value = state
+            setter()
+            agent.applyConfig(kind)
+            watchSafeApply(state)
+            delay(1500)
+            runCatching { _network.value = agent.network() }
+            runCatching { _wifi.value = agent.wifi() }
+            runCatching { _networkConfig.value = agent.config() }
+        } catch (t: Throwable) {
+            _error.value = t.message ?: t.javaClass.simpleName
+        } finally {
+            _busy.value = false
+        }
+    }
+
+    private fun watchSafeApply(initial: SafeApplyState) = viewModelScope.launch {
+        var state = initial
+        while (state.active && state.secondsRemaining > 0) {
+            delay(1000)
+            val localRemaining = (state.deadlineEpoch - System.currentTimeMillis() / 1000).coerceAtLeast(0)
+            state = state.copy(secondsRemaining = localRemaining, active = localRemaining > 0)
+            _safeApply.value = state
+
+            if (localRemaining % 5L == 0L && ssh.isConnected()) {
+                runCatching { agent.safeStatus() }.getOrNull()?.let {
+                    state = it
+                    _safeApply.value = it
+                }
+            }
+        }
+    }
+
+    fun confirmSafeApply() = viewModelScope.launch {
+        val tx = _safeApply.value.transactionId
+        if (tx.isBlank()) return@launch
+        task {
+            agent.safeConfirm(tx)
+            _safeApply.value = SafeApplyState()
+            _network.value = agent.network()
+            _wifi.value = agent.wifi()
+            _networkConfig.value = agent.config()
+        }
+    }
+
+    fun rollbackSafeApply() = viewModelScope.launch {
+        val tx = _safeApply.value.transactionId
+        if (tx.isBlank()) return@launch
+        task {
+            agent.safeRollback(tx)
+            _safeApply.value = SafeApplyState()
+            delay(2500)
+            runCatching { _network.value = agent.network() }
+            runCatching { _wifi.value = agent.wifi() }
+            runCatching { _networkConfig.value = agent.config() }
+        }
+    }
+
     fun setBlocked(device: DeviceInfo, blocked: Boolean) = viewModelScope.launch {
-        task { agent.setBlocked(device.mac, blocked); _devices.value = agent.devices() }
+        task {
+            agent.setBlocked(device.mac, blocked)
+            _devices.value = agent.devices()
+        }
     }
 
     fun serviceAction(service: ServiceInfo, action: String) = viewModelScope.launch {
-        task { agent.serviceAction(service.name, action); _services.value = agent.services() }
+        task {
+            agent.serviceAction(service.name, action)
+            _services.value = agent.services()
+        }
     }
 
     fun restartNetwork() = viewModelScope.launch { task { agent.restartNetwork() } }
+
     fun reboot() = viewModelScope.launch {
         _busy.value = true
         _error.value = null
