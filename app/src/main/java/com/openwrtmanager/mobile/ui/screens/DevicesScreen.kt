@@ -3,14 +3,19 @@ package com.openwrtmanager.mobile.ui.screens
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.openwrtmanager.mobile.model.DeviceInfo
+import com.openwrtmanager.mobile.model.DevicePolicy
 import com.openwrtmanager.mobile.model.DeviceTraffic
 import com.openwrtmanager.mobile.model.DeviceTrafficCapability
+import com.openwrtmanager.mobile.model.QosCapability
 import com.openwrtmanager.mobile.ui.MainViewModel
+import kotlin.math.roundToInt
 
 @Composable
 fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
@@ -18,6 +23,9 @@ fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val traffic by vm.deviceTraffic.collectAsState()
     val capability by vm.deviceTrafficCapability.collectAsState()
     val trafficMessage by vm.deviceTrafficMessage.collectAsState()
+    val policy by vm.devicePolicy.collectAsState()
+    val qosCapability by vm.qosCapability.collectAsState()
+    val policyMessage by vm.devicePolicyMessage.collectAsState()
 
     var selected by remember { mutableStateOf<DeviceInfo?>(null) }
 
@@ -76,7 +84,10 @@ fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                         traffic = trafficByMac[d.mac],
                         trafficAvailable = capability.available,
                         vm = vm,
-                        onDetails = { selected = d }
+                        onDetails = {
+                            selected = d
+                            vm.loadDevicePolicy(d.mac)
+                        }
                     )
                 }
             }
@@ -99,7 +110,10 @@ fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                         traffic = trafficByMac[d.mac],
                         trafficAvailable = capability.available,
                         vm = vm,
-                        onDetails = { selected = d }
+                        onDetails = {
+                            selected = d
+                            vm.loadDevicePolicy(d.mac)
+                        }
                     )
                 }
             }
@@ -107,11 +121,18 @@ fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     }
 
     selected?.let { device ->
-        DeviceDetailDialog(
+        DevicePolicyDialog(
             device = device,
             traffic = trafficByMac[device.mac],
             trafficAvailable = capability.available,
-            onDismiss = { selected = null }
+            policy = policy?.takeIf { it.mac.equals(device.mac, ignoreCase = true) },
+            qosCapability = qosCapability,
+            message = policyMessage,
+            vm = vm,
+            onDismiss = {
+                selected = null
+                vm.clearDevicePolicy()
+            }
         )
     }
 }
@@ -249,7 +270,7 @@ private fun DeviceCard(
 
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onDetails) { Text("详情") }
+                OutlinedButton(onClick = onDetails) { Text("详情/管理") }
                 Button(onClick = { vm.setBlocked(device, !device.blocked) }) {
                     Text(if (device.blocked) "恢复联网" else "立即断网")
                 }
@@ -259,12 +280,40 @@ private fun DeviceCard(
 }
 
 @Composable
-private fun DeviceDetailDialog(
+private fun DevicePolicyDialog(
     device: DeviceInfo,
     traffic: DeviceTraffic?,
     trafficAvailable: Boolean,
+    policy: DevicePolicy?,
+    qosCapability: QosCapability,
+    message: String,
+    vm: MainViewModel,
     onDismiss: () -> Unit
 ) {
+    var alias by remember(device.mac) { mutableStateOf("") }
+    var staticIp by remember(device.mac) { mutableStateOf("") }
+    var qosEnabled by remember(device.mac) { mutableStateOf(false) }
+    var downloadMbps by remember(device.mac) { mutableStateOf("10") }
+    var uploadMbps by remember(device.mac) { mutableStateOf("5") }
+    var scheduleEnabled by remember(device.mac) { mutableStateOf(false) }
+    var weekdays by remember(device.mac) { mutableStateOf(setOf(1, 2, 3, 4, 5)) }
+    var startTime by remember(device.mac) { mutableStateOf("22:00") }
+    var endTime by remember(device.mac) { mutableStateOf("07:00") }
+
+    LaunchedEffect(policy) {
+        policy?.let {
+            alias = it.alias
+            staticIp = it.staticIp
+            qosEnabled = it.qosEnabled
+            if (it.downloadKbps > 0) downloadMbps = formatMbpsInput(it.downloadKbps)
+            if (it.uploadKbps > 0) uploadMbps = formatMbpsInput(it.uploadKbps)
+            scheduleEnabled = it.schedule.enabled
+            weekdays = it.schedule.weekdays.toSet()
+            startTime = it.schedule.startTime
+            endTime = it.schedule.endTime
+        }
+    }
+
     val connectionLabel = when (device.connectionType) {
         "wifi" -> device.band.ifBlank { "Wi-Fi" }
         "ethernet" -> "有线"
@@ -273,18 +322,171 @@ private fun DeviceDetailDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(device.hostname) },
+        title = { Text(policy?.alias?.ifBlank { device.hostname } ?: device.hostname) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 620.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
                 Text(if (device.online) "● 当前在线" else "○ 最近发现")
-                Text("MAC：${device.mac}")
-                Text("连接：$connectionLabel")
-                if (device.interfaceName.isNotBlank()) Text("接口：${device.interfaceName}")
-                if (device.state.isNotBlank()) Text("邻居状态：${device.state}")
-                device.signalDbm?.let { Text("信号：$it dBm") }
+                Text("MAC：${device.mac}", style = MaterialTheme.typography.bodySmall)
+                Text("连接：$connectionLabel", style = MaterialTheme.typography.bodySmall)
+                if (device.interfaceName.isNotBlank()) {
+                    Text("接口：${device.interfaceName}", style = MaterialTheme.typography.bodySmall)
+                }
+                device.signalDbm?.let {
+                    Text("信号：$it dBm", style = MaterialTheme.typography.bodySmall)
+                }
 
-                Spacer(Modifier.height(6.dp))
-                Text("地址", style = MaterialTheme.typography.titleSmall)
+                if (trafficAvailable && traffic != null) {
+                    Text(
+                        "实时 ↓ ${formatRate(traffic.rxBps)}  ↑ ${formatRate(traffic.txBps)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                HorizontalDivider()
+                Text("设备名称与固定 IP", style = MaterialTheme.typography.titleMedium)
+                OutlinedTextField(
+                    value = alias,
+                    onValueChange = { alias = it.take(40) },
+                    label = { Text("设备名称") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = staticIp,
+                    onValueChange = { staticIp = it.filter { ch -> ch.isDigit() || ch == '.' }.take(15) },
+                    label = { Text("固定 IPv4（留空为自动 DHCP）") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Button(
+                    onClick = { vm.saveDeviceIdentity(device, alias, staticIp) },
+                    enabled = policy != null
+                ) { Text("保存名称 / 固定 IP") }
+                Text(
+                    "固定 IP 写入 OpenWrt DHCP host；已有租约通常要设备重新获取 DHCP 后才会切换。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+
+                HorizontalDivider()
+                Text("单设备限速", style = MaterialTheme.typography.titleMedium)
+                Text(qosCapability.detail.ifBlank { "正在检测原生 nftables…" }, style = MaterialTheme.typography.bodySmall)
+
+                if (!qosCapability.available) {
+                    Button(onClick = vm::installQosBackend) { Text("重新检测 nftables") }
+                    Text(
+                        "V0.1.9 已改为直接使用 Kwrt/OpenWrt 自带 nftables，不再依赖 nft-qos 软件包。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                } else {
+                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                        Switch(checked = qosEnabled, onCheckedChange = { qosEnabled = it })
+                        Spacer(Modifier.width(8.dp))
+                        Text(if (qosEnabled) "已启用" else "未启用")
+                    }
+                    if (qosEnabled) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedTextField(
+                                value = downloadMbps,
+                                onValueChange = { downloadMbps = sanitizeRateInput(it) },
+                                label = { Text("下载 Mbps") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                            OutlinedTextField(
+                                value = uploadMbps,
+                                onValueChange = { uploadMbps = sanitizeRateInput(it) },
+                                label = { Text("上传 Mbps") },
+                                singleLine = true,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                    val downKbps = mbpsToKbps(downloadMbps)
+                    val upKbps = mbpsToKbps(uploadMbps)
+                    Button(
+                        onClick = { vm.saveDeviceQos(device, qosEnabled, downKbps, upKbps) },
+                        enabled = !qosEnabled || (downKbps >= 128 && upKbps >= 128)
+                    ) { Text("保存限速") }
+                    Text(
+                        "使用原生 nftables 的 MAC 限速；本版不修改全局 WAN SQM，也不安装额外 QoS 软件包。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                HorizontalDivider()
+                Text("定时断网", style = MaterialTheme.typography.titleMedium)
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Switch(checked = scheduleEnabled, onCheckedChange = { scheduleEnabled = it })
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (scheduleEnabled) "计划已启用" else "计划未启用")
+                }
+
+                if (scheduleEnabled) {
+                    Text("生效星期", style = MaterialTheme.typography.bodySmall)
+                    DayChipRow(
+                        days = listOf(1 to "一", 2 to "二", 3 to "三", 4 to "四"),
+                        selected = weekdays,
+                        onToggle = { day ->
+                            weekdays = if (day in weekdays) weekdays - day else weekdays + day
+                        }
+                    )
+                    DayChipRow(
+                        days = listOf(5 to "五", 6 to "六", 0 to "日"),
+                        selected = weekdays,
+                        onToggle = { day ->
+                            weekdays = if (day in weekdays) weekdays - day else weekdays + day
+                        }
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = startTime,
+                            onValueChange = { startTime = sanitizeTimeInput(it) },
+                            label = { Text("断网 HH:MM") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                        OutlinedTextField(
+                            value = endTime,
+                            onValueChange = { endTime = sanitizeTimeInput(it) },
+                            label = { Text("恢复 HH:MM") },
+                            singleLine = true,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
+                    Text(
+                        "支持跨午夜，例如 22:00 → 07:00；计划断网和手动断网分开记录，计划结束不会误取消手动断网。",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+
+                Button(
+                    onClick = {
+                        vm.saveDeviceSchedule(
+                            device,
+                            scheduleEnabled,
+                            weekdays.toList(),
+                            startTime,
+                            endTime
+                        )
+                    },
+                    enabled = !scheduleEnabled ||
+                        (weekdays.isNotEmpty() && validTimeText(startTime) && validTimeText(endTime))
+                ) { Text("保存定时断网") }
+
+                if (message.isNotBlank()) {
+                    AssistChip(
+                        onClick = vm::clearDevicePolicyMessage,
+                        label = { Text(message) }
+                    )
+                }
+
+                HorizontalDivider()
+                Text("已观察地址", style = MaterialTheme.typography.titleMedium)
                 val addresses = device.addresses.ifEmpty {
                     listOfNotNull(device.ip.takeIf { it.isNotBlank() })
                 }
@@ -293,24 +495,60 @@ private fun DeviceDetailDialog(
                 } else {
                     addresses.forEach { Text(it, style = MaterialTheme.typography.bodySmall) }
                 }
-
-                Spacer(Modifier.height(8.dp))
-                Text("流量", style = MaterialTheme.typography.titleSmall)
-                if (trafficAvailable && traffic != null) {
-                    Text("实时下载：${formatRate(traffic.rxBps)}")
-                    Text("实时上传：${formatRate(traffic.txBps)}")
-                    Text("统计周期下载：${formatBytes(traffic.rxBytes)}")
-                    Text("统计周期上传：${formatBytes(traffic.txBytes)}")
-                    Text("连接数：${traffic.connections}")
-                } else {
-                    Text("当前没有可靠的单设备流量数据。", style = MaterialTheme.typography.bodySmall)
-                }
             }
         },
         confirmButton = {
             TextButton(onClick = onDismiss) { Text("关闭") }
         }
     )
+}
+
+@Composable
+private fun DayChipRow(
+    days: List<Pair<Int, String>>,
+    selected: Set<Int>,
+    onToggle: (Int) -> Unit
+) {
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        days.forEach { (value, label) ->
+            FilterChip(
+                selected = value in selected,
+                onClick = { onToggle(value) },
+                label = { Text(label) }
+            )
+        }
+    }
+}
+
+private fun sanitizeRateInput(value: String): String {
+    var dotSeen = false
+    return buildString {
+        value.forEach { ch ->
+            when {
+                ch.isDigit() -> append(ch)
+                ch == '.' && !dotSeen -> {
+                    append(ch)
+                    dotSeen = true
+                }
+            }
+        }
+    }.take(8)
+}
+
+private fun mbpsToKbps(value: String): Int =
+    ((value.toDoubleOrNull() ?: 0.0) * 1000.0).roundToInt().coerceIn(0, 1_000_000)
+
+private fun formatMbpsInput(kbps: Int): String {
+    val mbps = kbps / 1000.0
+    return if (mbps == mbps.toInt().toDouble()) mbps.toInt().toString() else "%.1f".format(mbps)
+}
+
+private fun sanitizeTimeInput(value: String): String =
+    value.filter { it.isDigit() || it == ':' }.take(5)
+
+private fun validTimeText(value: String): Boolean {
+    if (!Regex("^([01][0-9]|2[0-3]):[0-5][0-9]$").matches(value)) return false
+    return true
 }
 
 private fun formatRate(bytesPerSecond: Long): String {

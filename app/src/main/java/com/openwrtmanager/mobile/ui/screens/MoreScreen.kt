@@ -69,7 +69,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.8：设备中心 3.0 / nlbwmon 单设备流量 / 多地址详情 / 实时流量排行",
+                "V0.1.9：设备命名 / DHCP 固定 IP / nft-qos 单设备限速 / 定时断网",
                 style = MaterialTheme.typography.bodySmall
             )
         }

@@ -7,10 +7,12 @@ import com.jcraft.jsch.Session
 import com.openwrtmanager.mobile.data.SecureStore
 import com.openwrtmanager.mobile.model.RouterProfile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
-import java.security.PublicKey
 import java.util.Base64
 
 class SshManager(private val secureStore: SecureStore) {
@@ -18,30 +20,43 @@ class SshManager(private val secureStore: SecureStore) {
     @Volatile var lastFingerprint: String? = null
         private set
 
-    suspend fun connect(profile: RouterProfile): Result<String> = withContext(Dispatchers.IO) {
-        runCatching {
-            disconnect()
-            val jsch = JSch()
-            val s = jsch.getSession(profile.username, profile.host, profile.port)
-            s.setPassword(profile.password)
-            s.setConfig("PreferredAuthentications", "password,keyboard-interactive")
-            s.setConfig("StrictHostKeyChecking", "no")
-            s.timeout = 12_000
-            s.connect(12_000)
+    /*
+     * Dropbear/OpenWrt can reject or destabilize overlapping channels on one SSH
+     * connection, especially while opkg is running. All SSH/SFTP work therefore
+     * shares one transport mutex. Realtime monitors wait instead of competing
+     * with package/configuration operations.
+     */
+    private val transportMutex = Mutex()
 
-            val hostKey = s.hostKey?.key ?: ""
-            val fingerprint = sha256HostKey(hostKey)
-            val saved = secureStore.getHostFingerprint(profile.host, profile.port)
-            if (saved != null && saved != fingerprint) {
-                s.disconnect()
-                error("SSH 主机密钥已变化。已保存：$saved\n当前：$fingerprint")
+    suspend fun connect(profile: RouterProfile): Result<String> =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    disconnectInternal()
+                    val jsch = JSch()
+                    val s = jsch.getSession(profile.username, profile.host, profile.port)
+                    s.setPassword(profile.password)
+                    s.setConfig("PreferredAuthentications", "password,keyboard-interactive")
+                    s.setConfig("StrictHostKeyChecking", "no")
+                    s.timeout = 12_000
+                    s.setServerAliveInterval(15_000)
+                    s.setServerAliveCountMax(3)
+                    s.connect(12_000)
+
+                    val hostKey = s.hostKey?.key ?: ""
+                    val fingerprint = sha256HostKey(hostKey)
+                    val saved = secureStore.getHostFingerprint(profile.host, profile.port)
+                    if (saved != null && saved != fingerprint) {
+                        s.disconnect()
+                        error("SSH 主机密钥已变化。已保存：$saved\n当前：$fingerprint")
+                    }
+                    if (saved == null) secureStore.saveHostFingerprint(profile.host, profile.port, fingerprint)
+                    lastFingerprint = fingerprint
+                    session = s
+                    fingerprint
+                }
             }
-            if (saved == null) secureStore.saveHostFingerprint(profile.host, profile.port, fingerprint)
-            lastFingerprint = fingerprint
-            session = s
-            fingerprint
         }
-    }
 
     private fun sha256HostKey(base64Key: String): String {
         if (base64Key.isBlank()) return "unknown"
@@ -50,52 +65,83 @@ class SshManager(private val secureStore: SecureStore) {
         return "SHA256:" + Base64.getEncoder().withoutPadding().encodeToString(digest)
     }
 
-    suspend fun exec(command: String, timeoutMs: Long = 15_000): String = withContext(Dispatchers.IO) {
-        val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
-        val channel = s.openChannel("exec") as ChannelExec
-        channel.setCommand(command)
-        channel.setInputStream(null)
-        val output = channel.inputStream
-        val error = channel.errStream
-        channel.connect(5_000)
-        val start = System.currentTimeMillis()
-        while (!channel.isClosed) {
-            if (System.currentTimeMillis() - start > timeoutMs) {
-                channel.disconnect()
-                error("命令执行超时")
+    suspend fun exec(command: String, timeoutMs: Long = 15_000): String =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
+                val channel = s.openChannel("exec") as ChannelExec
+                val stdout = ByteArrayOutputStream()
+                val stderr = ByteArrayOutputStream()
+
+                try {
+                    channel.setCommand(command)
+                    channel.setInputStream(null)
+                    channel.setOutputStream(stdout)
+                    channel.setErrStream(stderr)
+
+                    try {
+                        channel.connect(8_000)
+                    } catch (t: Throwable) {
+                        error("SSH 通道建立失败：${t.message ?: t.javaClass.simpleName}")
+                    }
+
+                    val start = System.currentTimeMillis()
+                    while (!channel.isClosed) {
+                        if (!s.isConnected) error("SSH 连接已中断")
+                        if (System.currentTimeMillis() - start > timeoutMs) {
+                            error("命令执行超时")
+                        }
+                        Thread.sleep(30)
+                    }
+
+                    val out = stdout.toString(Charsets.UTF_8.name())
+                    val err = stderr.toString(Charsets.UTF_8.name())
+                    val exit = channel.exitStatus
+                    if (exit != 0 && out.isBlank()) {
+                        error(err.ifBlank { "命令失败：$exit" })
+                    }
+                    out.ifBlank { err }
+                } finally {
+                    runCatching { channel.disconnect() }
+                }
             }
-            Thread.sleep(30)
         }
-        val stdout = output.bufferedReader().readText()
-        val stderr = error?.bufferedReader()?.readText().orEmpty()
-        val exit = channel.exitStatus
-        channel.disconnect()
-        if (exit != 0 && stdout.isBlank()) error(stderr.ifBlank { "命令失败：$exit" })
-        stdout.ifBlank { stderr }
-    }
 
-    suspend fun upload(content: ByteArray, remotePath: String) = withContext(Dispatchers.IO) {
-        val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
-        val channel = s.openChannel("sftp") as ChannelSftp
-        channel.connect(5_000)
-        ByteArrayInputStream(content).use { channel.put(it, remotePath) }
-        channel.disconnect()
-    }
-
-    suspend fun download(remotePath: String): ByteArray = withContext(Dispatchers.IO) {
-        val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
-        val channel = s.openChannel("sftp") as ChannelSftp
-        channel.connect(5_000)
-        try {
-            channel.get(remotePath).use { it.readBytes() }
-        } finally {
-            channel.disconnect()
+    suspend fun upload(content: ByteArray, remotePath: String) =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
+                val channel = s.openChannel("sftp") as ChannelSftp
+                try {
+                    channel.connect(8_000)
+                    ByteArrayInputStream(content).use { channel.put(it, remotePath) }
+                } finally {
+                    runCatching { channel.disconnect() }
+                }
+            }
         }
-    }
+
+    suspend fun download(remotePath: String): ByteArray =
+        transportMutex.withLock {
+            withContext(Dispatchers.IO) {
+                val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
+                val channel = s.openChannel("sftp") as ChannelSftp
+                try {
+                    channel.connect(8_000)
+                    channel.get(remotePath).use { it.readBytes() }
+                } finally {
+                    runCatching { channel.disconnect() }
+                }
+            }
+        }
 
     fun isConnected(): Boolean = session?.isConnected == true
 
     fun disconnect() {
+        disconnectInternal()
+    }
+
+    private fun disconnectInternal() {
         runCatching { session?.disconnect() }
         session = null
     }

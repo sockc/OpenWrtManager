@@ -260,3 +260,28 @@ data class DeviceTraffic(
     val totalBytes: Long get() = rxBytes + txBytes
     val totalBps: Long get() = rxBps + txBps
 }
+
+
+data class DeviceSchedule(
+    val enabled: Boolean = false,
+    val weekdays: List<Int> = listOf(1, 2, 3, 4, 5),
+    val startTime: String = "22:00",
+    val endTime: String = "07:00"
+)
+
+data class QosCapability(
+    val installed: Boolean = false,
+    val running: Boolean = false,
+    val available: Boolean = false,
+    val detail: String = ""
+)
+
+data class DevicePolicy(
+    val mac: String,
+    val alias: String = "",
+    val staticIp: String = "",
+    val qosEnabled: Boolean = false,
+    val downloadKbps: Int = 0,
+    val uploadKbps: Int = 0,
+    val schedule: DeviceSchedule = DeviceSchedule()
+)

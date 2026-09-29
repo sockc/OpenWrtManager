@@ -1,10 +1,15 @@
 #!/bin/sh
-# OpenWrt Manager Config Helper V0.1.8
+# OpenWrt Manager Config Helper V0.1.9
 set -u
 
-VERSION="0.1.8"
+VERSION="0.1.9"
 BASE="/etc/openwrt-manager"
 SAFE="$BASE/safe-apply"
+ALIASES="$BASE/device_aliases.tsv"
+SCHEDULES="$BASE/device_schedules.tsv"
+QOS_POLICIES="$BASE/device_qos.tsv"
+QOS_INIT="/etc/init.d/owm-qos"
+CRON="/etc/crontabs/root"
 SELF="/usr/bin/owm-config"
 
 q() {
@@ -15,6 +20,7 @@ q() {
 
 uci_get() { uci -q get "$1" 2>/dev/null || true; }
 valid_name() { echo "$1" | grep -Eq '^[A-Za-z0-9_.@+-]+$'; }
+valid_mac() { echo "$1" | grep -Eq '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$'; }
 valid_num() { echo "$1" | grep -Eq '^[0-9]+$'; }
 valid_ipv4() {
     echo "$1" | awk -F. 'NF==4 {for(i=1;i<=4;i++) if($i !~ /^[0-9]+$/ || $i<0 || $i>255) exit 1; exit 0} {exit 1}'
@@ -26,8 +32,31 @@ decode_b64() {
 
 cmd_install() {
     mkdir -p "$BASE" "$SAFE"
+    touch "$ALIASES" "$SCHEDULES" "$QOS_POLICIES" /etc/sysupgrade.conf
+    grep -qxF '/etc/openwrt-manager/' /etc/sysupgrade.conf 2>/dev/null || echo '/etc/openwrt-manager/' >> /etc/sysupgrade.conf
     if [ "$0" != "$SELF" ]; then cp "$0" "$SELF"; fi
     chmod 700 "$SELF"
+    cat > "$QOS_INIT" <<'EOF'
+#!/bin/sh /etc/rc.common
+START=22
+STOP=88
+
+start() {
+    /usr/bin/owm-config qos-reload >/dev/null 2>&1 || true
+}
+
+reload() {
+    start
+}
+
+stop() {
+    /usr/bin/owm-config qos-stop >/dev/null 2>&1 || true
+}
+EOF
+    chmod 755 "$QOS_INIT"
+    "$QOS_INIT" enable >/dev/null 2>&1 || true
+    regen_cron >/dev/null 2>&1 || true
+    qos_reload >/dev/null 2>&1 || true
     printf '{"ok":true,"version":"%s"}\n' "$VERSION"
 }
 
@@ -73,6 +102,503 @@ cmd_config() {
     printf ',"wan_netmask":'; q "$wan_mask"
     printf ',"wan_gateway":'; q "$wan_gw"
     printf ',"wan6_enabled":%s}\n' "$wan6_enabled"
+}
+
+
+device_key() {
+    printf 'owm_%s' "$(printf '%s' "$1" | tr -d ':' | tr A-F a-f)"
+}
+
+alias_encoded() {
+    [ -f "$ALIASES" ] || return 0
+    awk -F '\t' -v m="$1" 'toupper($1)==toupper(m){print $2; exit}' "$ALIASES" 2>/dev/null
+}
+
+alias_value() {
+    enc="$(alias_encoded "$1")"
+    [ -n "$enc" ] || return 0
+    printf '%s' "$enc" | base64 -d 2>/dev/null || true
+}
+
+set_alias_value() {
+    mac="$1"
+    alias="$(decode_b64 "$2")"
+    alias="$(printf '%s' "$alias" | tr '\r\n\t' '   ')"
+    encoded=""
+    [ -n "$alias" ] && encoded="$(printf '%s' "$alias" | base64 | tr -d '\r\n')"
+
+    mkdir -p "$BASE"
+    touch "$ALIASES"
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$ALIASES" > "$ALIASES.tmp" || true
+    if [ -n "$encoded" ]; then
+        printf '%s\t%s\n' "$mac" "$encoded" >> "$ALIASES.tmp"
+    fi
+    mv "$ALIASES.tmp" "$ALIASES"
+}
+
+find_dhcp_host_by_mac() {
+    target="$(printf '%s' "$1" | tr A-F a-f)"
+    for sec in $(uci -q show dhcp 2>/dev/null | sed -n 's/^dhcp\.\([^.=]*\)=host$/\1/p'); do
+        macs="$(uci -q get "dhcp.$sec.mac" 2>/dev/null)"
+        for m in $macs; do
+            [ "$(printf '%s' "$m" | tr A-F a-f)" = "$target" ] && { printf '%s' "$sec"; return 0; }
+        done
+    done
+    return 1
+}
+
+find_dhcp_host_by_ip() {
+    target="$1"
+    for sec in $(uci -q show dhcp 2>/dev/null | sed -n 's/^dhcp\.\([^.=]*\)=host$/\1/p'); do
+        ip="$(uci -q get "dhcp.$sec.ip" 2>/dev/null)"
+        [ "$ip" = "$target" ] && { printf '%s' "$sec"; return 0; }
+    done
+    return 1
+}
+
+cmd_device_alias() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+    set_alias_value "$mac" "$2"
+    echo '{"ok":true}'
+}
+
+cmd_device_static_ip() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    ip="$2"
+    valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+
+    sec="$(find_dhcp_host_by_mac "$mac" 2>/dev/null || true)"
+
+    if [ -z "$ip" ]; then
+        if [ -n "$sec" ]; then
+            case "$sec" in
+                owm_*) uci -q delete "dhcp.$sec" || true ;;
+                *) uci -q delete "dhcp.$sec.ip" || true ;;
+            esac
+            uci commit dhcp
+            /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+        fi
+        echo '{"ok":true}'
+        return
+    fi
+
+    valid_ipv4 "$ip" || { echo '{"ok":false,"error":"invalid static ip"}'; exit 3; }
+
+    lan_ip="$(uci_get network.lan.ipaddr)"
+    [ "$ip" = "$lan_ip" ] && { echo '{"ok":false,"error":"static ip conflicts with router"}'; exit 4; }
+
+    lease_mac="$(awk -v i="$ip" '$3==i{print $2; exit}' /tmp/dhcp.leases 2>/dev/null)"
+    if [ -n "$lease_mac" ] && [ "$(printf '%s' "$lease_mac" | tr a-f A-F)" != "$mac" ]; then
+        echo '{"ok":false,"error":"static ip is currently leased to another device"}'
+        exit 5
+    fi
+
+    other="$(find_dhcp_host_by_ip "$ip" 2>/dev/null || true)"
+    if [ -n "$other" ]; then
+        other_macs="$(uci -q get "dhcp.$other.mac" 2>/dev/null)"
+        same=false
+        for m in $other_macs; do
+            [ "$(printf '%s' "$m" | tr a-f A-F)" = "$mac" ] && same=true
+        done
+        [ "$same" = "true" ] || { echo '{"ok":false,"error":"static ip already assigned"}'; exit 6; }
+    fi
+
+    if [ -z "$sec" ]; then
+        sec="$(device_key "$mac")"
+        uci -q delete "dhcp.$sec" || true
+        uci set "dhcp.$sec=host"
+    fi
+    uci set "dhcp.$sec.mac=$mac"
+    uci set "dhcp.$sec.ip=$ip"
+    uci commit dhcp
+    /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
+    echo '{"ok":true}'
+}
+
+qos_policy_row() {
+    [ -f "$QOS_POLICIES" ] || return 0
+    awk -F '\t' -v m="$1" 'toupper($1)==toupper(m){print; exit}' "$QOS_POLICIES" 2>/dev/null
+}
+
+qos_lan_mode() {
+    lan_dev="$(uci_get network.lan.device)"
+    [ -n "$lan_dev" ] || lan_dev="$(uci_get network.lan.ifname | awk '{print $1}')"
+    if [ -n "$lan_dev" ] && [ -d "/sys/class/net/$lan_dev/bridge" ]; then
+        printf '%s' "bridge"
+    else
+        printf '%s' "inet"
+    fi
+}
+
+qos_generate_script() {
+    outfile="$1"
+    table_name="$2"
+    mode="$(qos_lan_mode)"
+
+    if [ "$mode" = "bridge" ]; then
+        family="bridge"
+        upload_hook="prerouting"
+        download_hook="postrouting"
+    else
+        family="inet"
+        upload_hook="postrouting"
+        download_hook="prerouting"
+    fi
+
+    {
+        printf 'table %s %s {\n' "$family" "$table_name"
+        printf '  chain upload {\n'
+        printf '    type filter hook %s priority 0; policy accept;\n' "$upload_hook"
+        if [ -f "$QOS_POLICIES" ]; then
+            while IFS="$(printf '\t')" read -r mac down up; do
+                valid_mac "$mac" || continue
+                valid_num "$up" || continue
+                [ "$up" -gt 0 ] || continue
+                urate=$(((up + 7) / 8))
+                [ "$urate" -gt 0 ] || urate=1
+                printf '    ether saddr %s limit rate over %s kbytes/second drop\n' "$mac" "$urate"
+            done < "$QOS_POLICIES"
+        fi
+        printf '  }\n'
+        printf '  chain download {\n'
+        printf '    type filter hook %s priority 0; policy accept;\n' "$download_hook"
+        if [ -f "$QOS_POLICIES" ]; then
+            while IFS="$(printf '\t')" read -r mac down up; do
+                valid_mac "$mac" || continue
+                valid_num "$down" || continue
+                [ "$down" -gt 0 ] || continue
+                drate=$(((down + 7) / 8))
+                [ "$drate" -gt 0 ] || drate=1
+                printf '    ether daddr %s limit rate over %s kbytes/second drop\n' "$mac" "$drate"
+            done < "$QOS_POLICIES"
+        fi
+        printf '  }\n'
+        printf '}\n'
+    } > "$outfile"
+}
+
+qos_delete_live_table() {
+    nft delete table bridge owm_qos_mac >/dev/null 2>&1 || true
+    nft delete table inet owm_qos_mac >/dev/null 2>&1 || true
+}
+
+qos_validate_backend() {
+    command -v nft >/dev/null 2>&1 || return 1
+    probe="/tmp/owm-qos-probe.$$"
+    qos_generate_script "$probe" "owm_qos_probe_$$"
+    nft -c -f "$probe" >/tmp/owm-qos-check.$$ 2>&1
+    rc=$?
+    rm -f "$probe" /tmp/owm-qos-check.$$
+    return "$rc"
+}
+
+qos_reload() {
+    command -v nft >/dev/null 2>&1 || return 1
+    testfile="/tmp/owm-qos-test.$$"
+    livefile="/tmp/owm-qos-live.$$"
+
+    qos_generate_script "$testfile" "owm_qos_test_$$"
+    if ! nft -c -f "$testfile" >/tmp/owm-qos-check.$$ 2>&1; then
+        cat /tmp/owm-qos-check.$$ >&2
+        rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$
+        return 2
+    fi
+
+    qos_generate_script "$livefile" "owm_qos_mac"
+    qos_delete_live_table
+    if ! nft -f "$livefile" >/tmp/owm-qos-apply.$$ 2>&1; then
+        cat /tmp/owm-qos-apply.$$ >&2
+        rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$ /tmp/owm-qos-apply.$$
+        return 3
+    fi
+
+    rm -f "$testfile" "$livefile" /tmp/owm-qos-check.$$ /tmp/owm-qos-apply.$$
+    return 0
+}
+
+cmd_qos_capability() {
+    installed=false
+    running=false
+    available=false
+    detail="系统缺少 nftables"
+
+    if command -v nft >/dev/null 2>&1; then
+        installed=true
+        if qos_validate_backend; then
+            available=true
+            running=true
+            detail="原生 nftables 单设备限速可用"
+        else
+            detail="nftables 存在，但当前内核不支持所需的 MAC 限速规则"
+        fi
+    fi
+
+    printf '{"installed":%s,"running":%s,"available":%s,"detail":' "$installed" "$running" "$available"
+    q "$detail"
+    printf '}\n'
+}
+
+cmd_device_qos() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    down="$2"
+    up="$3"
+
+    valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+    valid_num "$down" && valid_num "$up" || { echo '{"ok":false,"error":"invalid rate"}'; exit 3; }
+    [ "$down" -ge 128 ] && [ "$down" -le 1000000 ] && [ "$up" -ge 128 ] && [ "$up" -le 1000000 ] || {
+        echo '{"ok":false,"error":"rate out of range"}'
+        exit 4
+    }
+    qos_validate_backend || {
+        echo '{"ok":false,"error":"native nftables qos unavailable"}'
+        exit 5
+    }
+
+    mkdir -p "$BASE"
+    touch "$QOS_POLICIES"
+    cp "$QOS_POLICIES" "$QOS_POLICIES.bak" 2>/dev/null || true
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$QOS_POLICIES" > "$QOS_POLICIES.tmp" || true
+    printf '%s\t%s\t%s\n' "$mac" "$down" "$up" >> "$QOS_POLICIES.tmp"
+    mv "$QOS_POLICIES.tmp" "$QOS_POLICIES"
+
+    if ! qos_reload; then
+        [ -f "$QOS_POLICIES.bak" ] && mv "$QOS_POLICIES.bak" "$QOS_POLICIES"
+        qos_reload >/dev/null 2>&1 || true
+        echo '{"ok":false,"error":"failed to apply nftables qos"}'
+        exit 6
+    fi
+
+    rm -f "$QOS_POLICIES.bak"
+    echo '{"ok":true}'
+}
+
+cmd_device_qos_clear() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    valid_mac "$mac" || exit 2
+
+    mkdir -p "$BASE"
+    touch "$QOS_POLICIES"
+    cp "$QOS_POLICIES" "$QOS_POLICIES.bak" 2>/dev/null || true
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$QOS_POLICIES" > "$QOS_POLICIES.tmp" || true
+    mv "$QOS_POLICIES.tmp" "$QOS_POLICIES"
+
+    if ! qos_reload; then
+        [ -f "$QOS_POLICIES.bak" ] && mv "$QOS_POLICIES.bak" "$QOS_POLICIES"
+        qos_reload >/dev/null 2>&1 || true
+        echo '{"ok":false,"error":"failed to clear nftables qos"}'
+        exit 3
+    fi
+
+    rm -f "$QOS_POLICIES.bak"
+    echo '{"ok":true}'
+}
+
+cmd_qos_reload() {
+    if qos_reload; then
+        echo '{"ok":true}'
+    else
+        echo '{"ok":false,"error":"qos reload failed"}'
+        exit 2
+    fi
+}
+
+cmd_qos_stop() {
+    qos_delete_live_table
+    echo '{"ok":true}'
+}
+
+valid_time() {
+    echo "$1" | grep -Eq '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+}
+
+valid_days() {
+    [ -n "$1" ] || return 1
+    oldifs="$IFS"; IFS=','
+    set -- $1
+    IFS="$oldifs"
+    [ "$#" -gt 0 ] || return 1
+    for d in "$@"; do
+        case "$d" in 0|1|2|3|4|5|6) ;; *) return 1 ;; esac
+    done
+    return 0
+}
+
+days_has() {
+    list="$1"; target="$2"
+    oldifs="$IFS"; IFS=','
+    set -- $list
+    IFS="$oldifs"
+    for d in "$@"; do [ "$d" = "$target" ] && return 0; done
+    return 1
+}
+
+shift_days() {
+    list="$1"
+    oldifs="$IFS"; IFS=','
+    set -- $list
+    IFS="$oldifs"
+    out=""
+    for d in "$@"; do
+        n=$(((d + 1) % 7))
+        [ -z "$out" ] && out="$n" || out="$out,$n"
+    done
+    printf '%s' "$out"
+}
+
+to_num() {
+    n="$(printf '%s' "$1" | sed 's/^0//')"
+    [ -n "$n" ] || n=0
+    printf '%s' "$n"
+}
+
+schedule_row() {
+    [ -f "$SCHEDULES" ] || return 0
+    awk -F '\t' -v m="$1" 'toupper($1)==toupper(m){print; exit}' "$SCHEDULES" 2>/dev/null
+}
+
+regen_cron() {
+    mkdir -p /etc/crontabs "$BASE"
+    touch "$CRON"
+    grep -v '# OWM-SCHEDULE ' "$CRON" > "$CRON.tmp" || true
+
+    if [ -f "$SCHEDULES" ]; then
+        while IFS="$(printf '\t')" read -r mac enabled days start end; do
+            [ "$enabled" = "1" ] || continue
+            valid_mac "$mac" && valid_days "$days" && valid_time "$start" && valid_time "$end" || continue
+
+            shour="$(to_num "${start%:*}")"; smin="$(to_num "${start#*:}")"
+            ehour="$(to_num "${end%:*}")"; emin="$(to_num "${end#*:}")"
+            start_minutes=$((shour * 60 + smin))
+            end_minutes=$((ehour * 60 + emin))
+            end_days="$days"
+            [ "$end_minutes" -le "$start_minutes" ] && end_days="$(shift_days "$days")"
+
+            printf '%s %s * * %s /usr/bin/owm-agent schedule-block %s # OWM-SCHEDULE %s START\n' \
+                "$smin" "$shour" "$days" "$mac" "$mac" >> "$CRON.tmp"
+            printf '%s %s * * %s /usr/bin/owm-agent schedule-unblock %s # OWM-SCHEDULE %s END\n' \
+                "$emin" "$ehour" "$end_days" "$mac" "$mac" >> "$CRON.tmp"
+        done < "$SCHEDULES"
+    fi
+
+    mv "$CRON.tmp" "$CRON"
+    chmod 600 "$CRON"
+    /etc/init.d/cron reload >/dev/null 2>&1 || /etc/init.d/cron restart >/dev/null 2>&1 || true
+}
+
+apply_schedule_now() {
+    mac="$1"; days="$2"; start="$3"; end="$4"
+    day="$(date +%w)"
+    now="$(date +%H%M)"
+    nh="$(to_num "$(printf '%s' "$now" | cut -c1-2)")"
+    nm="$(to_num "$(printf '%s' "$now" | cut -c3-4)")"
+    now_minutes=$((nh * 60 + nm))
+    shour="$(to_num "${start%:*}")"; smin="$(to_num "${start#*:}")"
+    ehour="$(to_num "${end%:*}")"; emin="$(to_num "${end#*:}")"
+    start_minutes=$((shour * 60 + smin))
+    end_minutes=$((ehour * 60 + emin))
+    active=false
+
+    if [ "$end_minutes" -gt "$start_minutes" ]; then
+        if days_has "$days" "$day" && [ "$now_minutes" -ge "$start_minutes" ] && [ "$now_minutes" -lt "$end_minutes" ]; then
+            active=true
+        fi
+    else
+        prev=$(((day + 6) % 7))
+        if { days_has "$days" "$day" && [ "$now_minutes" -ge "$start_minutes" ]; } || \
+           { days_has "$days" "$prev" && [ "$now_minutes" -lt "$end_minutes" ]; }; then
+            active=true
+        fi
+    fi
+
+    if [ "$active" = "true" ]; then
+        /usr/bin/owm-agent schedule-block "$mac" >/dev/null 2>&1 || true
+    else
+        /usr/bin/owm-agent schedule-unblock "$mac" >/dev/null 2>&1 || true
+    fi
+}
+
+cmd_device_schedule() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    enabled="$2"; days="$3"; start="$4"; end="$5"
+    valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+
+    mkdir -p "$BASE"
+    touch "$SCHEDULES"
+    awk -F '\t' -v m="$mac" 'toupper($1)!=toupper(m){print}' "$SCHEDULES" > "$SCHEDULES.tmp" || true
+
+    if [ "$enabled" = "1" ]; then
+        valid_days "$days" && valid_time "$start" && valid_time "$end" || {
+            rm -f "$SCHEDULES.tmp"
+            echo '{"ok":false,"error":"invalid schedule"}'
+            exit 3
+        }
+        printf '%s\t1\t%s\t%s\t%s\n' "$mac" "$days" "$start" "$end" >> "$SCHEDULES.tmp"
+    fi
+
+    mv "$SCHEDULES.tmp" "$SCHEDULES"
+    regen_cron
+
+    if [ "$enabled" = "1" ]; then
+        apply_schedule_now "$mac" "$days" "$start" "$end"
+    else
+        /usr/bin/owm-agent schedule-unblock "$mac" >/dev/null 2>&1 || true
+    fi
+    echo '{"ok":true}'
+}
+
+cmd_device_policy() {
+    mac="$(printf '%s' "$1" | tr a-f A-F)"
+    valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+
+    alias="$(alias_value "$mac")"
+    static_ip=""
+    dhcp_sec="$(find_dhcp_host_by_mac "$mac" 2>/dev/null || true)"
+    [ -n "$dhcp_sec" ] && static_ip="$(uci -q get "dhcp.$dhcp_sec.ip" 2>/dev/null)"
+
+    qos_enabled=false
+    down=0
+    up=0
+    qos_row="$(qos_policy_row "$mac")"
+    if [ -n "$qos_row" ]; then
+        oldifs="$IFS"; IFS="$(printf '\t')"; set -- $qos_row; IFS="$oldifs"
+        down="${2:-0}"
+        up="${3:-0}"
+        valid_num "$down" || down=0
+        valid_num "$up" || up=0
+        [ "$down" -gt 0 ] && [ "$up" -gt 0 ] && qos_enabled=true
+    fi
+
+    schedule_enabled=false
+    days="1,2,3,4,5"
+    start="22:00"
+    end="07:00"
+    sched="$(schedule_row "$mac")"
+    if [ -n "$sched" ]; then
+        oldifs="$IFS"; IFS="$(printf '\t')"; set -- $sched; IFS="$oldifs"
+        [ "${2:-0}" = "1" ] && schedule_enabled=true
+        days="${3:-1,2,3,4,5}"
+        start="${4:-22:00}"
+        end="${5:-07:00}"
+    fi
+
+    printf '{"mac":'; q "$mac"
+    printf ',"alias":'; q "$alias"
+    printf ',"static_ip":'; q "$static_ip"
+    printf ',"qos_enabled":%s,"download_kbps":%s,"upload_kbps":%s' "$qos_enabled" "$down" "$up"
+    printf ',"schedule":{"enabled":%s,"weekdays":[' "$schedule_enabled"
+    first=1
+    oldifs="$IFS"; IFS=','
+    set -- $days
+    IFS="$oldifs"
+    for d in "$@"; do
+        [ "$first" = "1" ] || printf ','
+        first=0
+        printf '%s' "$d"
+    done
+    printf '],"start_time":'; q "$start"
+    printf ',"end_time":'; q "$end"
+    printf '}}\n'
 }
 
 active_meta() { echo "$SAFE/active"; }
@@ -603,6 +1129,15 @@ case "$1" in
     install) cmd_install ;;
     version) printf '{"version":"%s"}\n' "$VERSION" ;;
     config) cmd_config ;;
+    device-policy) cmd_device_policy "$2" ;;
+    device-alias) cmd_device_alias "$2" "$3" ;;
+    device-static-ip) cmd_device_static_ip "$2" "$3" ;;
+    qos-capability) cmd_qos_capability ;;
+    device-qos) cmd_device_qos "$2" "$3" "$4" "$5" ;;
+    device-qos-clear) cmd_device_qos_clear "$2" ;;
+    qos-reload) cmd_qos_reload ;;
+    qos-stop) cmd_qos_stop ;;
+    device-schedule) cmd_device_schedule "$2" "$3" "$4" "$5" "$6" ;;
     safe-begin) cmd_safe_begin "$2" "$3" ;;
     safe-status) cmd_safe_status ;;
     safe-confirm) cmd_safe_confirm "$2" ;;

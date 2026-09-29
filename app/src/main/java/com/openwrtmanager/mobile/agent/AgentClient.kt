@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.8" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.9" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -146,6 +146,94 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                 )
             }
         }
+    }
+
+
+    suspend fun devicePolicy(mac: String): DevicePolicy {
+        val m = safeToken(mac.uppercase())
+        val o = JSONObject(ssh.exec("/usr/bin/owm-config device-policy '$m'", 20_000))
+        val scheduleObject = o.optJSONObject("schedule") ?: JSONObject()
+        val weekdays = buildList {
+            val a = scheduleObject.optJSONArray("weekdays")
+            if (a != null) {
+                for (i in 0 until a.length()) {
+                    val day = a.optInt(i, -1)
+                    if (day in 0..6) add(day)
+                }
+            }
+        }.ifEmpty { listOf(1, 2, 3, 4, 5) }
+        return DevicePolicy(
+            mac = o.optString("mac", mac.uppercase()),
+            alias = o.optString("alias"),
+            staticIp = o.optString("static_ip"),
+            qosEnabled = o.optBoolean("qos_enabled"),
+            downloadKbps = o.optInt("download_kbps"),
+            uploadKbps = o.optInt("upload_kbps"),
+            schedule = DeviceSchedule(
+                enabled = scheduleObject.optBoolean("enabled"),
+                weekdays = weekdays,
+                startTime = scheduleObject.optString("start_time", "22:00"),
+                endTime = scheduleObject.optString("end_time", "07:00")
+            )
+        )
+    }
+
+    suspend fun qosCapability(): QosCapability {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-config qos-capability", 20_000))
+        return QosCapability(
+            installed = o.optBoolean("installed"),
+            running = o.optBoolean("running"),
+            available = o.optBoolean("available"),
+            detail = o.optString("detail")
+        )
+    }
+
+    suspend fun setDeviceAlias(mac: String, alias: String): String =
+        ssh.exec(
+            "/usr/bin/owm-config device-alias '${safeToken(mac.uppercase())}' '${b64(alias)}'",
+            20_000
+        )
+
+    suspend fun setDeviceStaticIp(mac: String, ip: String): String =
+        ssh.exec(
+            "/usr/bin/owm-config device-static-ip '${safeToken(mac.uppercase())}' '${safeToken(ip)}'",
+            25_000
+        )
+
+    suspend fun setDeviceQos(
+        mac: String,
+        downloadKbps: Int,
+        uploadKbps: Int,
+        label: String
+    ): String =
+        ssh.exec(
+            "/usr/bin/owm-config device-qos '${safeToken(mac.uppercase())}' " +
+                "'${downloadKbps.coerceIn(128, 1_000_000)}' " +
+                "'${uploadKbps.coerceIn(128, 1_000_000)}' '${b64(label)}'",
+            30_000
+        )
+
+    suspend fun clearDeviceQos(mac: String): String =
+        ssh.exec(
+            "/usr/bin/owm-config device-qos-clear '${safeToken(mac.uppercase())}'",
+            25_000
+        )
+
+    suspend fun setDeviceSchedule(
+        mac: String,
+        enabled: Boolean,
+        weekdays: List<Int>,
+        startTime: String,
+        endTime: String
+    ): String {
+        val days = weekdays.filter { it in 0..6 }.distinct().sorted().joinToString(",")
+        val start = startTime.replace(Regex("[^0-9:]"), "")
+        val end = endTime.replace(Regex("[^0-9:]"), "")
+        return ssh.exec(
+            "/usr/bin/owm-config device-schedule '${safeToken(mac.uppercase())}' " +
+                "'${if (enabled) "1" else "0"}' '$days' '$start' '$end'",
+            30_000
+        )
     }
 
     suspend fun network(): NetworkSummary {

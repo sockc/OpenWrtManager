@@ -124,3 +124,14 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Per-device realtime rates are calculated in the Android app from successive nlbwmon MAC-grouped counters. The router only returns accounting counters.
 - Cumulative traffic is labelled as the current nlbwmon accounting period rather than "today", because nlbwmon periods are configurable and are monthly by default.
 - The home dashboard can show the current highest-traffic device when nlbwmon data is available.
+
+
+## V0.1.9 Device Policies
+
+- Device aliases are stored separately from DHCP hostnames, so users can use friendly names without forcing them into DNS hostname syntax.
+- Static IPv4 leases are written through OpenWrt UCI `dhcp host` sections with duplicate-IP protection.
+- Per-device bandwidth limits use the existing `nft-qos` package when available. The app offers an explicit install action and does not silently install QoS packages.
+- V0.1.9 uses nft-qos MAC-based client rules and keeps global WAN/SQM configuration untouched.
+- Scheduled internet blocking is implemented through OpenWrt cron and router-side block/unblock commands. Overnight windows such as 22:00-07:00 are supported.
+- Manual blocking and scheduled blocking are tracked separately, so a schedule ending cannot accidentally cancel a manual block.
+- Device aliases, schedules, and block state under `/etc/openwrt-manager/` are added to `/etc/sysupgrade.conf` so standard OpenWrt configuration backups preserve them.
