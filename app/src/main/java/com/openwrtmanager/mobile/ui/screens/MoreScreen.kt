@@ -61,7 +61,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.3：Safe Apply / Wi-Fi、LAN、DHCP、DNS、WAN 可编辑 / 自动回滚 / 固定签名升级",
+                "V0.1.4：服务中心 1.0 / 应用服务识别 / 系统服务保护 / 进程只读监控",
                 style = MaterialTheme.typography.bodySmall
             )
         }

@@ -94,7 +94,35 @@ data class SafeApplyState(
 data class ServiceInfo(
     val name: String,
     val enabled: Boolean,
-    val running: Boolean
+    val running: Boolean,
+    val protected: Boolean = false
+)
+
+data class AppServiceInfo(
+    val id: String,
+    val displayName: String,
+    val initService: String,
+    val controllable: Boolean = true,
+    val running: Boolean,
+    val enabled: Boolean,
+    val health: String = "unknown",
+    val version: String = "",
+    val pid: Int? = null,
+    val cpuPercent: Double? = null,
+    val memoryKb: Long? = null,
+    val ports: List<Int> = emptyList(),
+    val detail: String = ""
+)
+
+data class ProcessInfo(
+    val pid: Int,
+    val name: String,
+    val user: String = "",
+    val cpuPercent: Double = 0.0,
+    val memoryPercent: Double = 0.0,
+    val rssKb: Long = 0,
+    val command: String = "",
+    val protected: Boolean = false
 )
 
 data class ReleaseInfo(
