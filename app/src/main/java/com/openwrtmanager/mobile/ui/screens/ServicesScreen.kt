@@ -24,6 +24,7 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
     var logService by remember { mutableStateOf<AppServiceInfo?>(null) }
     var logLines by remember { mutableIntStateOf(100) }
+    var logQuery by remember { mutableStateOf("") }
     var detailService by remember { mutableStateOf<AppServiceInfo?>(null) }
     var confirmStop by remember { mutableStateOf<AppServiceInfo?>(null) }
     var section by remember { mutableStateOf("apps") }
@@ -89,6 +90,7 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 onLogs = {
                     if (it.initService.isNotBlank()) {
                         logLines = 100
+                        logQuery = ""
                         logService = it
                         vm.loadServiceLogs(it.initService, logLines)
                     }
@@ -153,6 +155,7 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             onLogs = {
                 if (service.initService.isNotBlank()) {
                     logLines = 100
+                    logQuery = ""
                     logService = service
                     vm.loadServiceLogs(service.initService, logLines)
                 }
@@ -218,12 +221,27 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                         }
                     }
                     Spacer(Modifier.height(6.dp))
+                    OutlinedTextField(
+                        value = logQuery,
+                        onValueChange = { logQuery = it },
+                        label = { Text("搜索日志") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    val shownLogs = if (logQuery.isBlank()) {
+                        serviceLogs
+                    } else {
+                        serviceLogs.lineSequence()
+                            .filter { it.contains(logQuery, ignoreCase = true) }
+                            .joinToString("\n")
+                    }
                     Surface(
                         modifier = Modifier.fillMaxWidth().weight(1f),
                         tonalElevation = 1.dp
                     ) {
                         Text(
-                            serviceLogs.ifBlank { "暂无相关日志" },
+                            shownLogs.ifBlank { "暂无匹配日志" },
                             modifier = Modifier.padding(10.dp).verticalScroll(rememberScrollState()),
                             style = MaterialTheme.typography.bodySmall
                         )
