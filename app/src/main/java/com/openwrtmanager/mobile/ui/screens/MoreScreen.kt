@@ -69,7 +69,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.2.0：应用控制中心 / LuCI 管理面板 / SSH 隧道 WebView / 应用识别去重",
+                "V0.2.1：独立 WebUI 自动发现 / 应用详情 / 面板重连 / 日志增强",
                 style = MaterialTheme.typography.bodySmall
             )
         }
