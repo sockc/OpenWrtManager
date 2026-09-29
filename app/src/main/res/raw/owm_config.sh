@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Config Helper V0.1.5
+# OpenWrt Manager Config Helper V0.1.6
 set -u
 
-VERSION="0.1.5"
+VERSION="0.1.6"
 BASE="/etc/openwrt-manager"
 SAFE="$BASE/safe-apply"
 SELF="/usr/bin/owm-config"
