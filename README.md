@@ -83,3 +83,13 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Application-service status, PID, memory use, autostart state, start/restart, autostart toggle, and per-service logs.
 - System-service protection is enforced both in the Android UI and router agent for critical networking services.
 - Process inventory is read-only in V0.1.4; critical processes are marked and no arbitrary process termination is exposed.
+
+
+## V0.1.5 Firewall Center
+
+- New firewall center under More: port forwarding, traffic rules, and zone overview.
+- Port forwards can be added, edited, enabled/disabled, and deleted.
+- TCP, UDP, and TCP+UDP mappings are supported.
+- Existing traffic rules are readable and can be enabled/disabled; full rule editing remains deferred.
+- Firewall zones are read-only in V0.1.5 to avoid accidental WAN/LAN isolation changes.
+- Every firewall mutation uses the existing 90-second Safe Apply transaction with router-side rollback.

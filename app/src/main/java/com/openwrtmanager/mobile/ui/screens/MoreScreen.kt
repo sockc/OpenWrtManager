@@ -25,6 +25,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     when(page) {
         "logs" -> LogsScreen(vm, modifier) { page = "menu" }
         "terminal" -> TerminalScreen(vm, modifier) { page = "menu" }
+        "firewall" -> FirewallScreen(vm, modifier) { page = "menu" }
         else -> Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("更多", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(12.dp))
@@ -53,6 +54,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 }
             }
 
+            MoreButton("防火墙与端口转发", "端口转发、流量规则、区域状态，支持 Safe Apply") { page = "firewall" }
             MoreButton("系统日志", "查看最近系统日志，敏感字段自动脱敏") { page = "logs" }
             MoreButton("SSH 命令终端", "高级操作，直接执行路由器命令") { page = "terminal" }
             MoreButton("重启网络", "重新加载网络接口") { vm.restartNetwork() }
@@ -61,7 +63,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.4：服务中心 1.0 / 应用服务识别 / 系统服务保护 / 进程只读监控",
+                "V0.1.5：防火墙中心 / 端口转发增删改 / 流量规则开关 / 区域只读 / Safe Apply",
                 style = MaterialTheme.typography.bodySmall
             )
         }

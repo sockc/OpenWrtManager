@@ -42,6 +42,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val networkConfig: StateFlow<NetworkConfig?> = _networkConfig.asStateFlow()
     private val _safeApply = MutableStateFlow(SafeApplyState())
     val safeApply: StateFlow<SafeApplyState> = _safeApply.asStateFlow()
+    private val _firewall = MutableStateFlow(FirewallSnapshot())
+    val firewall: StateFlow<FirewallSnapshot> = _firewall.asStateFlow()
 
     private val _services = MutableStateFlow<List<ServiceInfo>>(emptyList())
     val services: StateFlow<List<ServiceInfo>> = _services.asStateFlow()
@@ -127,6 +129,51 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _wifi.value = agent.wifi()
             _networkConfig.value = agent.config()
             _safeApply.value = runCatching { agent.safeStatus() }.getOrDefault(SafeApplyState())
+        }
+    }
+
+    fun refreshFirewall() = viewModelScope.launch {
+        task { _firewall.value = agent.firewallSnapshot() }
+    }
+
+    fun addPortForward(
+        name: String,
+        srcPort: String,
+        destIp: String,
+        destPort: String,
+        proto: String,
+        enabled: Boolean
+    ) = firewallChange {
+        agent.addPortForward(name, srcPort, destIp, destPort, proto, enabled)
+    }
+
+    fun updatePortForward(rule: PortForwardRule) = firewallChange {
+        agent.updatePortForward(rule)
+    }
+
+    fun deletePortForward(index: Int) = firewallChange {
+        agent.deletePortForward(index)
+    }
+
+    fun toggleTrafficRule(index: Int, enabled: Boolean) = firewallChange {
+        agent.toggleTrafficRule(index, enabled)
+    }
+
+    private fun firewallChange(setter: suspend () -> Unit) = viewModelScope.launch {
+        _busy.value = true
+        _error.value = null
+        try {
+            val state = agent.safeBegin("firewall", 90)
+            _safeApply.value = state
+            setter()
+            agent.applyConfig("firewall")
+            watchSafeApply(state)
+            delay(1200)
+            _firewall.value = agent.firewallSnapshot()
+        } catch (t: Throwable) {
+            _error.value = t.message ?: t.javaClass.simpleName
+        } finally {
+            _busy.value = false
         }
     }
 
@@ -287,6 +334,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _network.value = agent.network()
             _wifi.value = agent.wifi()
             _networkConfig.value = agent.config()
+            runCatching { _firewall.value = agent.firewallSnapshot() }
         }
     }
 
@@ -300,6 +348,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { _network.value = agent.network() }
             runCatching { _wifi.value = agent.wifi() }
             runCatching { _networkConfig.value = agent.config() }
+            runCatching { _firewall.value = agent.firewallSnapshot() }
         }
     }
 
