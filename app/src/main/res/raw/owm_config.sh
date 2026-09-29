@@ -494,6 +494,68 @@ cmd_firewall_toggle_rule() {
     echo '{"ok":true}'
 }
 
+
+cmd_backup_create() {
+    command -v sysupgrade >/dev/null 2>&1 || { echo '{"ok":false,"error":"sysupgrade not found"}'; exit 2; }
+
+    host="$(uci -q get system.@system[0].hostname 2>/dev/null)"
+    [ -n "$host" ] || host="openwrt"
+    safe_host="$(printf '%s' "$host" | tr -cd 'A-Za-z0-9_.-')"
+    [ -n "$safe_host" ] || safe_host="openwrt"
+    stamp="$(date +%Y%m%d-%H%M%S)"
+    path="/tmp/OpenWrtManager-${safe_host}-${stamp}.tar.gz"
+    includes=true
+
+    if sysupgrade -k -b "$path" >/tmp/owm-backup.log 2>&1; then
+        :
+    else
+        includes=false
+        rm -f "$path"
+        sysupgrade -b "$path" >/tmp/owm-backup.log 2>&1 || {
+            tail -n 30 /tmp/owm-backup.log >&2
+            exit 3
+        }
+    fi
+
+    size="$(wc -c < "$path" 2>/dev/null | tr -d ' ')"
+    printf '{"ok":true,"path":'; q "$path"
+    printf ',"filename":'; q "OpenWrtManager-${safe_host}-${stamp}.tar.gz"
+    printf ',"size_bytes":%s,"includes_package_list":%s}\n' "${size:-0}" "$includes"
+}
+
+cmd_backup_restore() {
+    path="${1:-}"
+    case "$path" in
+        /tmp/owm-restore-*.tar.gz) ;;
+        *) echo '{"ok":false,"error":"invalid restore path"}'; exit 2 ;;
+    esac
+
+    [ -s "$path" ] || { echo '{"ok":false,"error":"backup file missing"}'; exit 3; }
+    tar -tzf "$path" >/tmp/owm-restore-list.log 2>&1 || {
+        rm -f "$path"
+        echo '{"ok":false,"error":"invalid backup archive"}'
+        exit 4
+    }
+
+    if sysupgrade -r "$path" >/tmp/owm-restore.log 2>&1; then
+        rm -f "$path"
+        echo '{"ok":true,"reboot_required":true}'
+    else
+        tail -n 30 /tmp/owm-restore.log >&2
+        rm -f "$path"
+        exit 5
+    fi
+}
+
+cmd_backup_delete() {
+    path="${1:-}"
+    case "$path" in
+        /tmp/OpenWrtManager-*.tar.gz|/tmp/owm-restore-*.tar.gz) rm -f "$path" ;;
+        *) exit 2 ;;
+    esac
+    echo '{"ok":true}'
+}
+
 cmd_apply() {
     kind="$1"
     echo '{"ok":true,"applying":true}'
@@ -544,6 +606,9 @@ case "$1" in
     firewall-set-redirect) cmd_firewall_set_redirect "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
     firewall-delete-redirect) cmd_firewall_delete_redirect "$2" ;;
     firewall-toggle-rule) cmd_firewall_toggle_rule "$2" "$3" ;;
+    backup-create) cmd_backup_create ;;
+    backup-restore) cmd_backup_restore "$2" ;;
+    backup-delete) cmd_backup_delete "$2" ;;
     apply) cmd_apply "$2" ;;
     *) echo '{"error":"unknown command"}'; exit 2 ;;
 esac
