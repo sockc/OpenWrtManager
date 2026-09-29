@@ -5,6 +5,8 @@ set -u
 VERSION="0.1.9"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
+SCHEDULE_BLOCKED="$BASE/scheduled_blocked_macs"
+ALIASES="$BASE/device_aliases.tsv"
 SELF="/usr/bin/owm-agent"
 
 json_escape() {
@@ -14,6 +16,14 @@ q() { printf '"%s"' "$(json_escape "${1:-}")"; }
 valid_mac() { echo "$1" | grep -Eq '^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$'; }
 valid_name() { echo "$1" | grep -Eq '^[A-Za-z0-9_.@+-]+$'; }
 blocked_has() { [ -f "$BLOCKED" ] && grep -qiFx "$1" "$BLOCKED"; }
+scheduled_blocked_has() { [ -f "$SCHEDULE_BLOCKED" ] && grep -qiFx "$1" "$SCHEDULE_BLOCKED"; }
+effective_blocked() { blocked_has "$1" || scheduled_blocked_has "$1"; }
+device_alias() {
+    [ -f "$ALIASES" ] || return 0
+    encoded="$(awk -F '\t' -v m="$1" 'toupper($1)==toupper(m){print $2; exit}' "$ALIASES" 2>/dev/null)"
+    [ -n "$encoded" ] || return 0
+    printf '%s' "$encoded" | base64 -d 2>/dev/null || true
+}
 rule_name() { echo "owm_block_$(echo "$1" | tr -d ':' | tr a-f A-F)"; }
 firewall_reload() {
     if command -v fw4 >/dev/null 2>&1; then fw4 reload >/dev/null 2>&1
@@ -22,7 +32,7 @@ firewall_reload() {
 
 cmd_install() {
     mkdir -p "$BASE"
-    touch "$BLOCKED"
+    touch "$BLOCKED" "$SCHEDULE_BLOCKED" "$ALIASES"
     if [ "$0" != "$SELF" ]; then cp "$0" "$SELF"; fi
     chmod 700 "$SELF"
     printf '{"ok":true,"version":"%s"}\n' "$VERSION"
@@ -161,7 +171,8 @@ cmd_devices() {
         state="$(neigh_state "$best")"
         seen="$seen$mac_upper "
 
-        hostname="$(awk -v m="$mac" 'tolower($2)==tolower(m){print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
+        hostname="$(device_alias "$mac_upper")"
+        [ -n "$hostname" ] || hostname="$(awk -v m="$mac" 'tolower($2)==tolower(m){print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
         [ -n "$hostname" ] || hostname="$(awk -v i="$ip" '$3==i{print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
         [ "$hostname" = "*" ] && hostname=""
 
@@ -175,7 +186,7 @@ cmd_devices() {
             signal="${3:-}"
         fi
 
-        blocked=false; blocked_has "$mac_upper" && blocked=true
+        blocked=false; effective_blocked "$mac_upper" && blocked=true
         online=false
         if [ "$type" = "wifi" ]; then
             online=true
@@ -751,12 +762,9 @@ cmd_pkg_remove() {
     fi
 }
 
-cmd_block() {
-    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+ensure_block_rule() {
+    mac="$1"
     sec="$(rule_name "$mac")"
-    mkdir -p "$BASE"; touch "$BLOCKED"
-    blocked_has "$mac" || echo "$mac" >> "$BLOCKED"
-    sort -u "$BLOCKED" -o "$BLOCKED" 2>/dev/null || true
     uci -q delete "firewall.$sec" || true
     uci set "firewall.$sec=rule"
     uci set "firewall.$sec.name=OpenWrt Manager block $mac"
@@ -767,19 +775,56 @@ cmd_block() {
     uci set "firewall.$sec.enabled=1"
     uci commit firewall
     firewall_reload || true
+}
+
+remove_block_rule_if_unused() {
+    mac="$1"
+    effective_blocked "$mac" && return 0
+    sec="$(rule_name "$mac")"
+    uci -q delete "firewall.$sec" || true
+    uci commit firewall
+    firewall_reload || true
+}
+
+add_mac_to_file() {
+    file="$1"; mac="$2"
+    mkdir -p "$BASE"; touch "$file"
+    grep -qiFx "$mac" "$file" || echo "$mac" >> "$file"
+    sort -u "$file" -o "$file" 2>/dev/null || true
+}
+
+remove_mac_from_file() {
+    file="$1"; mac="$2"
+    [ -f "$file" ] || return 0
+    grep -viFx "$mac" "$file" > "$file.tmp" || true
+    mv "$file.tmp" "$file"
+}
+
+cmd_block() {
+    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
+    add_mac_to_file "$BLOCKED" "$mac"
+    ensure_block_rule "$mac"
     echo '{"ok":true}'
 }
 
 cmd_unblock() {
     mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
-    sec="$(rule_name "$mac")"
-    if [ -f "$BLOCKED" ]; then
-        grep -viFx "$mac" "$BLOCKED" > "$BLOCKED.tmp" || true
-        mv "$BLOCKED.tmp" "$BLOCKED"
-    fi
-    uci -q delete "firewall.$sec" || true
-    uci commit firewall
-    firewall_reload || true
+    remove_mac_from_file "$BLOCKED" "$mac"
+    remove_block_rule_if_unused "$mac"
+    echo '{"ok":true}'
+}
+
+cmd_schedule_block() {
+    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || exit 2
+    add_mac_to_file "$SCHEDULE_BLOCKED" "$mac"
+    ensure_block_rule "$mac"
+    echo '{"ok":true}'
+}
+
+cmd_schedule_unblock() {
+    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || exit 2
+    remove_mac_from_file "$SCHEDULE_BLOCKED" "$mac"
+    remove_block_rule_if_unused "$mac"
     echo '{"ok":true}'
 }
 
@@ -829,6 +874,8 @@ case "${1:-}" in
     logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
     block) cmd_block "${2:-}" ;;
     unblock) cmd_unblock "${2:-}" ;;
+    schedule-block) cmd_schedule_block "${2:-}" ;;
+    schedule-unblock) cmd_schedule_unblock "${2:-}" ;;
     service) cmd_service "${2:-}" "${3:-}" ;;
     network-restart) echo '{"ok":true}'; /etc/init.d/network restart >/dev/null 2>&1 & ;;
     reboot) echo '{"ok":true}'; sync; (sleep 1; reboot) >/dev/null 2>&1 & ;;
