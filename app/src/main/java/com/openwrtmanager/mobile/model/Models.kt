@@ -113,7 +113,12 @@ data class AppServiceInfo(
     val cpuPercent: Double? = null,
     val memoryKb: Long? = null,
     val ports: List<Int> = emptyList(),
-    val detail: String = ""
+    val detail: String = "",
+    val panelAvailable: Boolean = false,
+    val panelPath: String = "",
+    val panelPort: Int = 0,
+    val panelScheme: String = "http",
+    val panelKind: String = ""
 )
 
 data class ProcessInfo(
@@ -284,4 +289,15 @@ data class DevicePolicy(
     val downloadKbps: Int = 0,
     val uploadKbps: Int = 0,
     val schedule: DeviceSchedule = DeviceSchedule()
+)
+
+
+data class AppPanelState(
+    val opening: Boolean = false,
+    val open: Boolean = false,
+    val serviceId: String = "",
+    val title: String = "",
+    val url: String = "",
+    val localPort: Int = 0,
+    val error: String = ""
 )
