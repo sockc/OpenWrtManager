@@ -401,86 +401,7 @@ cmd_service_logs() {
 
 
 valid_pkg() {
-    echo "$1" | grep -Eq '^[A-Za-z0-9_.+@-]+
-    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
-    sec="$(rule_name "$mac")"
-    mkdir -p "$BASE"; touch "$BLOCKED"
-    blocked_has "$mac" || echo "$mac" >> "$BLOCKED"
-    sort -u "$BLOCKED" -o "$BLOCKED" 2>/dev/null || true
-    uci -q delete "firewall.$sec" || true
-    uci set "firewall.$sec=rule"
-    uci set "firewall.$sec.name=OpenWrt Manager block $mac"
-    uci set "firewall.$sec.src=lan"
-    uci set "firewall.$sec.dest=wan"
-    uci set "firewall.$sec.src_mac=$mac"
-    uci set "firewall.$sec.target=REJECT"
-    uci set "firewall.$sec.enabled=1"
-    uci commit firewall
-    firewall_reload || true
-    echo '{"ok":true}'
-}
-
-cmd_unblock() {
-    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
-    sec="$(rule_name "$mac")"
-    if [ -f "$BLOCKED" ]; then
-        grep -viFx "$mac" "$BLOCKED" > "$BLOCKED.tmp" || true
-        mv "$BLOCKED.tmp" "$BLOCKED"
-    fi
-    uci -q delete "firewall.$sec" || true
-    uci commit firewall
-    firewall_reload || true
-    echo '{"ok":true}'
-}
-
-cmd_service() {
-    name="${1:-}"; action="${2:-}"; valid_name "$name" || exit 2
-    case "$action" in start|stop|restart|reload|enable|disable) ;; *) exit 2;; esac
-    [ -x "/etc/init.d/$name" ] || exit 3
-
-    case "$name" in
-        network|firewall|dropbear|dnsmasq|odhcpd|ubus|rpcd|uhttpd)
-            case "$action" in
-                stop|restart|reload|disable)
-                    echo '{"ok":false,"error":"protected service"}'
-                    exit 4
-                    ;;
-            esac
-            ;;
-    esac
-
-    "/etc/init.d/$name" "$action" >/dev/null 2>&1
-    printf '{"ok":true}\n'
-}
-
-case "${1:-}" in
-    install) cmd_install ;;
-    version) printf '{"version":"%s","protocol":1}\n' "$VERSION" ;;
-    status) cmd_status ;;
-    devices) cmd_devices ;;
-    network) cmd_network ;;
-    wifi) cmd_wifi ;;
-    services) cmd_services ;;
-    app-services) cmd_app_services ;;
-    processes) cmd_processes ;;
-    service-logs) cmd_service_logs "${2:-}" "${3:-120}" ;;
-    pkg-status) cmd_pkg_status ;;
-    pkg-installed) cmd_pkg_list_installed ;;
-    pkg-upgradable) cmd_pkg_list_upgradable ;;
-    pkg-search) cmd_pkg_search "${2:-}" ;;
-    pkg-update) cmd_pkg_update ;;
-    pkg-install) cmd_pkg_install "${2:-}" ;;
-    pkg-upgrade) cmd_pkg_upgrade "${2:-}" ;;
-    pkg-remove) cmd_pkg_remove "${2:-}" ;;
-    logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
-    block) cmd_block "${2:-}" ;;
-    unblock) cmd_unblock "${2:-}" ;;
-    service) cmd_service "${2:-}" "${3:-}" ;;
-    network-restart) echo '{"ok":true}'; /etc/init.d/network restart >/dev/null 2>&1 & ;;
-    reboot) echo '{"ok":true}'; sync; (sleep 1; reboot) >/dev/null 2>&1 & ;;
-    *) echo '{"error":"unknown command"}'; exit 2 ;;
-esac
-
+    echo "$1" | grep -Eq '^[A-Za-z0-9_.+@-]+$'
 }
 
 pkg_protected() {
@@ -516,25 +437,29 @@ emit_pkg() {
 }
 
 cmd_pkg_list_installed() {
-    first=1; printf '['
+    first=1
+    printf '['
     opkg list-installed 2>/dev/null | while IFS= read -r line; do
         name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
         version="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
         [ -n "$name" ] || continue
-        [ $first -eq 1 ] || printf ','; first=0
+        [ $first -eq 1 ] || printf ','
+        first=0
         emit_pkg "$name" "$version" "" "" true false
     done
     printf ']\n'
 }
 
 cmd_pkg_list_upgradable() {
-    first=1; printf '['
+    first=1
+    printf '['
     opkg list-upgradable 2>/dev/null | while IFS= read -r line; do
         name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
         old="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
         new="$(printf '%s\n' "$line" | awk -F ' - ' '{print $3}')"
         [ -n "$name" ] || continue
-        [ $first -eq 1 ] || printf ','; first=0
+        [ $first -eq 1 ] || printf ','
+        first=0
         emit_pkg "$name" "$old" "$new" "" true true
     done
     printf ']\n'
@@ -542,83 +467,15 @@ cmd_pkg_list_upgradable() {
 
 cmd_pkg_search() {
     query="${1:-}"
-    echo "$query" | grep -Eq '^[A-Za-z0-9_.+@-]{2,64}
-    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
-    sec="$(rule_name "$mac")"
-    mkdir -p "$BASE"; touch "$BLOCKED"
-    blocked_has "$mac" || echo "$mac" >> "$BLOCKED"
-    sort -u "$BLOCKED" -o "$BLOCKED" 2>/dev/null || true
-    uci -q delete "firewall.$sec" || true
-    uci set "firewall.$sec=rule"
-    uci set "firewall.$sec.name=OpenWrt Manager block $mac"
-    uci set "firewall.$sec.src=lan"
-    uci set "firewall.$sec.dest=wan"
-    uci set "firewall.$sec.src_mac=$mac"
-    uci set "firewall.$sec.target=REJECT"
-    uci set "firewall.$sec.enabled=1"
-    uci commit firewall
-    firewall_reload || true
-    echo '{"ok":true}'
-}
-
-cmd_unblock() {
-    mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
-    sec="$(rule_name "$mac")"
-    if [ -f "$BLOCKED" ]; then
-        grep -viFx "$mac" "$BLOCKED" > "$BLOCKED.tmp" || true
-        mv "$BLOCKED.tmp" "$BLOCKED"
-    fi
-    uci -q delete "firewall.$sec" || true
-    uci commit firewall
-    firewall_reload || true
-    echo '{"ok":true}'
-}
-
-cmd_service() {
-    name="${1:-}"; action="${2:-}"; valid_name "$name" || exit 2
-    case "$action" in start|stop|restart|reload|enable|disable) ;; *) exit 2;; esac
-    [ -x "/etc/init.d/$name" ] || exit 3
-
-    case "$name" in
-        network|firewall|dropbear|dnsmasq|odhcpd|ubus|rpcd|uhttpd)
-            case "$action" in
-                stop|restart|reload|disable)
-                    echo '{"ok":false,"error":"protected service"}'
-                    exit 4
-                    ;;
-            esac
-            ;;
-    esac
-
-    "/etc/init.d/$name" "$action" >/dev/null 2>&1
-    printf '{"ok":true}\n'
-}
-
-case "${1:-}" in
-    install) cmd_install ;;
-    version) printf '{"version":"%s","protocol":1}\n' "$VERSION" ;;
-    status) cmd_status ;;
-    devices) cmd_devices ;;
-    network) cmd_network ;;
-    wifi) cmd_wifi ;;
-    services) cmd_services ;;
-    app-services) cmd_app_services ;;
-    processes) cmd_processes ;;
-    service-logs) cmd_service_logs "${2:-}" "${3:-120}" ;;
-    logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
-    block) cmd_block "${2:-}" ;;
-    unblock) cmd_unblock "${2:-}" ;;
-    service) cmd_service "${2:-}" "${3:-}" ;;
-    network-restart) echo '{"ok":true}'; /etc/init.d/network restart >/dev/null 2>&1 & ;;
-    reboot) echo '{"ok":true}'; sync; (sleep 1; reboot) >/dev/null 2>&1 & ;;
-    *) echo '{"error":"unknown command"}'; exit 2 ;;
-esac
- || {
+    echo "$query" | grep -Eq '^[A-Za-z0-9_.+@-]{2,64}$' || {
         echo '[]'
         return
     }
-    first=1; count=0; printf '['
-    opkg list 2>/dev/null | awk -v q="$query" 'BEGIN{IGNORECASE=1} index(tolower($0),tolower(q))>0 {print; n++; if(n>=80) exit}' | \
+
+    first=1
+    count=0
+    printf '['
+    opkg list 2>/dev/null | awk -v q="$query" 'index(tolower($0),tolower(q))>0 {print; n++; if(n>=80) exit}' | \
     while IFS= read -r line; do
         name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
         version="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
@@ -630,7 +487,8 @@ esac
             installed=true
             installed_ver="$(opkg status "$name" 2>/dev/null | awk -F': ' '/^Version:/{print $2; exit}')"
         fi
-        [ $first -eq 1 ] || printf ','; first=0
+        [ $first -eq 1 ] || printf ','
+        first=0
         emit_pkg "$name" "$installed_ver" "$version" "$desc" "$installed" false
         count=$((count + 1))
         [ "$count" -ge 80 ] && break
@@ -639,7 +497,7 @@ esac
 }
 
 cmd_pkg_update() {
-    command -v opkg >/dev/null 2>&1 || { echo '{"ok":false,"error":"opkg not found"}'; exit 2; }
+    command -v opkg >/dev/null 2>&1 || { echo '{"ok":false,"error":"opkg not found"}' >&2; exit 2; }
     if opkg update >/tmp/owm-opkg-update.log 2>&1; then
         echo '{"ok":true}'
     else
@@ -650,7 +508,7 @@ cmd_pkg_update() {
 
 cmd_pkg_install() {
     pkg="${1:-}"
-    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
     if opkg install "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
         printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
     else
@@ -661,7 +519,7 @@ cmd_pkg_install() {
 
 cmd_pkg_upgrade() {
     pkg="${1:-}"
-    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
     pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
     if opkg upgrade "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
         printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
@@ -673,7 +531,7 @@ cmd_pkg_upgrade() {
 
 cmd_pkg_remove() {
     pkg="${1:-}"
-    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
     pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
     if opkg status "$pkg" 2>/dev/null | grep -qi '^Essential: yes'; then
         echo '{"ok":false,"error":"essential package"}' >&2
@@ -750,6 +608,14 @@ case "${1:-}" in
     app-services) cmd_app_services ;;
     processes) cmd_processes ;;
     service-logs) cmd_service_logs "${2:-}" "${3:-120}" ;;
+    pkg-status) cmd_pkg_status ;;
+    pkg-installed) cmd_pkg_list_installed ;;
+    pkg-upgradable) cmd_pkg_list_upgradable ;;
+    pkg-search) cmd_pkg_search "${2:-}" ;;
+    pkg-update) cmd_pkg_update ;;
+    pkg-install) cmd_pkg_install "${2:-}" ;;
+    pkg-upgrade) cmd_pkg_upgrade "${2:-}" ;;
+    pkg-remove) cmd_pkg_remove "${2:-}" ;;
     logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
     block) cmd_block "${2:-}" ;;
     unblock) cmd_unblock "${2:-}" ;;
