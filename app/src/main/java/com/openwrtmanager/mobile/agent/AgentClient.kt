@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.3" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.4" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -259,12 +259,76 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
         ssh.exec("/usr/bin/owm-config apply '$safeKind'", 10_000)
     }
 
+
+    suspend fun appServices(): List<AppServiceInfo> {
+        val a = JSONArray(ssh.exec("/usr/bin/owm-agent app-services", 25_000))
+        return buildList {
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                val ports = buildList {
+                    val p = o.optJSONArray("ports")
+                    if (p != null) for (j in 0 until p.length()) add(p.optInt(j))
+                }
+                add(
+                    AppServiceInfo(
+                        id = o.optString("id"),
+                        displayName = o.optString("display_name"),
+                        initService = o.optString("init_service"),
+                        controllable = o.optBoolean("controllable", true),
+                        running = o.optBoolean("running"),
+                        enabled = o.optBoolean("enabled"),
+                        health = o.optString("health", "unknown"),
+                        version = o.optString("version"),
+                        pid = if (o.isNull("pid")) null else o.optInt("pid"),
+                        cpuPercent = if (o.isNull("cpu_percent")) null else o.optDouble("cpu_percent"),
+                        memoryKb = if (o.isNull("memory_kb")) null else o.optLong("memory_kb"),
+                        ports = ports,
+                        detail = o.optString("detail")
+                    )
+                )
+            }
+        }
+    }
+
+    suspend fun processes(): List<ProcessInfo> {
+        val a = JSONArray(ssh.exec("/usr/bin/owm-agent processes", 25_000))
+        return buildList {
+            for (i in 0 until a.length()) {
+                val o = a.getJSONObject(i)
+                add(
+                    ProcessInfo(
+                        pid = o.optInt("pid"),
+                        name = o.optString("name"),
+                        user = o.optString("user"),
+                        cpuPercent = o.optDouble("cpu_percent"),
+                        memoryPercent = o.optDouble("memory_percent"),
+                        rssKb = o.optLong("rss_kb"),
+                        command = o.optString("command"),
+                        protected = o.optBoolean("protected")
+                    )
+                )
+            }
+        }.sortedByDescending { it.rssKb }
+    }
+
+    suspend fun serviceLogs(name: String, lines: Int = 120): String {
+        val safe = name.replace(Regex("[^A-Za-z0-9_.@+-]"), "")
+        return ssh.exec("/usr/bin/owm-agent service-logs '$safe' ${lines.coerceIn(20, 300)}", 20_000)
+    }
+
     suspend fun services(): List<ServiceInfo> {
         val a = JSONArray(ssh.exec("/usr/bin/owm-agent services", 25_000))
         return buildList {
             for (i in 0 until a.length()) {
                 val o = a.getJSONObject(i)
-                add(ServiceInfo(o.optString("name"), o.optBoolean("enabled"), o.optBoolean("running")))
+                add(
+                    ServiceInfo(
+                        name = o.optString("name"),
+                        enabled = o.optBoolean("enabled"),
+                        running = o.optBoolean("running"),
+                        protected = o.optBoolean("protected", false)
+                    )
+                )
             }
         }
     }
