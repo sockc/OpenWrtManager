@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.openwrtmanager.mobile.model.ServiceInfo
+import com.openwrtmanager.mobile.model.AppServiceInfo
+import com.openwrtmanager.mobile.model.ProcessInfo
 import com.openwrtmanager.mobile.ui.MainViewModel
 
 @Composable
