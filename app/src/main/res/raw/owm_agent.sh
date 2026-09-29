@@ -886,20 +886,36 @@ cmd_app_services() {
         [ -n "$pid" ] || return 0
 
         ports="$(listen_ports_for_pid "$pid" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
-        [ -n "$ports" ] || return 0
+        panel_available=false
+        panel_kind=""
+        panel_path=""
+        panel_scheme="http"
+        panel_port=0
 
-        panel=""
-        for p in $ports; do
-            scheme="$(http_scheme_for_port "$p")"
-            [ -n "$scheme" ] || continue
-            panel="$scheme $p"
-            break
-        done
-        [ -n "$panel" ] || return 0
+        if luci_slug_exists "$svc"; then
+            panel_available=true
+            panel_kind="luci"
+            panel_path="/cgi-bin/luci/admin/services/$svc"
+            panel_scheme="$luci_scheme"
+            panel_port="$luci_port"
+            label="$(luci_title_for_slug "$svc")"
+            seen="${seen}${svc}|"
+        else
+            label="$svc"
+            for p in $ports; do
+                scheme="$(http_scheme_for_port "$p")"
+                [ -n "$scheme" ] || continue
+                panel_available=true
+                panel_kind="standalone"
+                panel_path="/"
+                panel_scheme="$scheme"
+                panel_port="$p"
+                break
+            done
+        fi
 
-        set -- $panel
-        panel_scheme="$1"
-        panel_port="$2"
+        [ "$panel_available" = "true" ] || return 0
+
         service_enabled "$svc" && enabled=true || enabled=false
         service_running "$svc" && running=true || running=false
         rss="$(pid_rss_kb "$pid")"
@@ -910,7 +926,7 @@ cmd_app_services() {
         [ $first -eq 1 ] || printf ','
         first=0
         printf '{"id":'; q "auto-$svc"
-        printf ',"display_name":'; q "$svc"
+        printf ',"display_name":'; q "$label"
         printf ',"init_service":'; q "$svc"
         printf ',"controllable":true,"running":%s,"enabled":%s' "$running" "$enabled"
         printf ',"health":"healthy","version":'; q "$version"
@@ -920,10 +936,13 @@ cmd_app_services() {
         printf ',"cpu_percent":null,"memory_kb":'
         [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
         printf ',"ports":'; emit_json_ports "$ports"
-        printf ',"detail":"自动发现 Web 服务"'
-        printf ',"panel_available":true,"panel_path":"/","panel_port":%s' "$panel_port"
+        printf ',"detail":"自动发现应用服务"'
+        printf ',"panel_available":true'
+        printf ',"panel_path":'; q "$panel_path"
+        printf ',"panel_port":%s' "$panel_port"
         printf ',"panel_scheme":'; q "$panel_scheme"
-        printf ',"panel_kind":"standalone","panel_host":"127.0.0.1"}'
+        printf ',"panel_kind":'; q "$panel_kind"
+        printf ',"panel_host":"127.0.0.1"}'
         seen_services="${seen_services}${svc}|"
     }
 
@@ -946,6 +965,17 @@ cmd_app_services() {
     emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享" "" "samba4-server" "0"
     emit_app_service "samba" "Samba" "samba" "smbd" "文件共享" "" "samba36-server" "0"
 
+    # Discover third-party services first so an init.d service and its
+    # matching LuCI page become one controllable application card instead of
+    # separate "service" and "panel" duplicates.
+    for init in /etc/init.d/*; do
+        [ -x "$init" ] || continue
+        svc="${init##*/}"
+        emit_generic_web_service "$svc"
+    done
+
+    # Any remaining LuCI Services entries are panel-only functions such as
+    # Wake on LAN or vendor-specific HTTPS configuration pages.
     for file in /usr/share/luci/menu.d/*.json; do
         [ -f "$file" ] || continue
         grep -o '"admin/services/[^"]*"' "$file" 2>/dev/null | tr -d '"' | while IFS= read -r route; do
@@ -956,14 +986,6 @@ cmd_app_services() {
         done
     done | sort -u | while IFS= read -r slug; do
         emit_panel_only "$slug"
-    done
-
-    # Discover third-party standalone Web services that have an init.d service
-    # and an actual HTTP(S)-like listening port. Common system daemons are excluded.
-    for init in /etc/init.d/*; do
-        [ -x "$init" ] || continue
-        svc="${init##*/}"
-        emit_generic_web_service "$svc"
     done
 
     printf ']\n'
