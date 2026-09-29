@@ -69,7 +69,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.7：实时 WAN / 1、5、15 分钟均值 / 网络诊断 / 健康检查 / 在线设备判定优化",
+                "V0.1.8：设备中心 3.0 / nlbwmon 单设备流量 / 多地址详情 / 实时流量排行",
                 style = MaterialTheme.typography.bodySmall
             )
         }
