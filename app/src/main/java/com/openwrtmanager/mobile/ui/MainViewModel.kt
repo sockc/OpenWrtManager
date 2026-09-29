@@ -45,6 +45,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     private val _firewall = MutableStateFlow(FirewallSnapshot())
     val firewall: StateFlow<FirewallSnapshot> = _firewall.asStateFlow()
 
+    private val _packageStatus = MutableStateFlow(PackageManagerStatus())
+    val packageStatus: StateFlow<PackageManagerStatus> = _packageStatus.asStateFlow()
+    private val _packages = MutableStateFlow<List<PackageInfo>>(emptyList())
+    val packages: StateFlow<List<PackageInfo>> = _packages.asStateFlow()
+    private val _packageMessage = MutableStateFlow("")
+    val packageMessage: StateFlow<String> = _packageMessage.asStateFlow()
+    private val _backupMessage = MutableStateFlow("")
+    val backupMessage: StateFlow<String> = _backupMessage.asStateFlow()
+
     private val _services = MutableStateFlow<List<ServiceInfo>>(emptyList())
     val services: StateFlow<List<ServiceInfo>> = _services.asStateFlow()
     private val _appServices = MutableStateFlow<List<AppServiceInfo>>(emptyList())
@@ -174,6 +183,88 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _error.value = t.message ?: t.javaClass.simpleName
         } finally {
             _busy.value = false
+        }
+    }
+
+
+    fun refreshPackageStatus() = viewModelScope.launch {
+        task { _packageStatus.value = agent.packageStatus() }
+    }
+
+    fun loadInstalledPackages() = viewModelScope.launch {
+        task {
+            _packages.value = agent.installedPackages()
+            _packageStatus.value = agent.packageStatus()
+        }
+    }
+
+    fun loadUpgradablePackages() = viewModelScope.launch {
+        task {
+            _packages.value = agent.upgradablePackages()
+            _packageStatus.value = agent.packageStatus()
+        }
+    }
+
+    fun searchPackages(query: String) = viewModelScope.launch {
+        task { _packages.value = agent.searchPackages(query) }
+    }
+
+    fun updatePackageLists() = viewModelScope.launch {
+        task {
+            agent.updatePackageLists()
+            _packageMessage.value = "软件源更新成功"
+            _packageStatus.value = agent.packageStatus()
+        }
+    }
+
+    fun installPackage(name: String) = viewModelScope.launch {
+        task {
+            agent.installPackage(name)
+            _packageMessage.value = "已安装 $name"
+            _packageStatus.value = agent.packageStatus()
+            _packages.value = agent.installedPackages()
+        }
+    }
+
+    fun upgradePackage(name: String) = viewModelScope.launch {
+        task {
+            agent.upgradePackage(name)
+            _packageMessage.value = "已升级 $name"
+            _packageStatus.value = agent.packageStatus()
+            _packages.value = agent.upgradablePackages()
+        }
+    }
+
+    fun removePackage(name: String) = viewModelScope.launch {
+        task {
+            agent.removePackage(name)
+            _packageMessage.value = "已卸载 $name"
+            _packageStatus.value = agent.packageStatus()
+            _packages.value = agent.installedPackages()
+        }
+    }
+
+    fun clearPackageMessage() { _packageMessage.value = "" }
+    fun clearBackupMessage() { _backupMessage.value = "" }
+
+    fun createConfigBackup(onReady: (BackupInfo, ByteArray) -> Unit) = viewModelScope.launch {
+        _busy.value = true
+        _error.value = null
+        try {
+            val result = agent.createBackup()
+            _backupMessage.value = "备份已生成"
+            onReady(result.first, result.second)
+        } catch (t: Throwable) {
+            _error.value = t.message ?: t.javaClass.simpleName
+        } finally {
+            _busy.value = false
+        }
+    }
+
+    fun restoreConfigBackup(bytes: ByteArray) = viewModelScope.launch {
+        task {
+            agent.restoreBackup(bytes)
+            _backupMessage.value = "配置已恢复，重启路由器后生效"
         }
     }
 

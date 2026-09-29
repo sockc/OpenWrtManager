@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.5" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.6" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -363,6 +363,95 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
             "/usr/bin/owm-config firewall-toggle-rule '${index.coerceAtLeast(0)}' '${if (enabled) "1" else "0"}'",
             20_000
         )
+    }
+
+
+    suspend fun packageStatus(): PackageManagerStatus {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent pkg-status", 20_000))
+        return PackageManagerStatus(
+            manager = o.optString("manager"),
+            installedCount = o.optInt("installed_count"),
+            upgradableCount = o.optInt("upgradable_count"),
+            overlayFreeKb = o.optLong("overlay_free_kb")
+        )
+    }
+
+    suspend fun installedPackages(): List<PackageInfo> =
+        parsePackages(ssh.exec("/usr/bin/owm-agent pkg-installed", 40_000))
+
+    suspend fun upgradablePackages(): List<PackageInfo> =
+        parsePackages(ssh.exec("/usr/bin/owm-agent pkg-upgradable", 40_000))
+
+    suspend fun searchPackages(query: String): List<PackageInfo> {
+        val q = query.replace(Regex("[^A-Za-z0-9_.+@-]"), "").take(64)
+        if (q.length < 2) return emptyList()
+        return parsePackages(ssh.exec("/usr/bin/owm-agent pkg-search '$q'", 60_000))
+    }
+
+    suspend fun updatePackageLists(): String =
+        ssh.exec("/usr/bin/owm-agent pkg-update", 120_000)
+
+    suspend fun installPackage(name: String): String =
+        ssh.exec("/usr/bin/owm-agent pkg-install '${safeName(name)}'", 180_000)
+
+    suspend fun upgradePackage(name: String): String =
+        ssh.exec("/usr/bin/owm-agent pkg-upgrade '${safeName(name)}'", 180_000)
+
+    suspend fun removePackage(name: String): String =
+        ssh.exec("/usr/bin/owm-agent pkg-remove '${safeName(name)}'", 120_000)
+
+    suspend fun createBackup(): Pair<BackupInfo, ByteArray> {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-config backup-create", 60_000))
+        val path = o.optString("path")
+        if (!path.startsWith("/tmp/OpenWrtManager-") || !path.endsWith(".tar.gz")) {
+            error("备份路径无效")
+        }
+        val info = BackupInfo(
+            filename = o.optString("filename").ifBlank { "OpenWrtManager-backup.tar.gz" },
+            sizeBytes = o.optLong("size_bytes"),
+            includesPackageList = o.optBoolean("includes_package_list", false)
+        )
+        val bytes = try {
+            ssh.download(path)
+        } finally {
+            runCatching { ssh.exec("/usr/bin/owm-config backup-delete '$path'", 10_000) }
+        }
+        return info to bytes
+    }
+
+    suspend fun restoreBackup(bytes: ByteArray): String {
+        require(bytes.isNotEmpty()) { "备份文件为空" }
+        require(bytes.size <= 32 * 1024 * 1024) { "备份文件超过 32 MB" }
+        val path = "/tmp/owm-restore-${System.currentTimeMillis()}.tar.gz"
+        ssh.upload(bytes, path)
+        return try {
+            ssh.exec("/usr/bin/owm-config backup-restore '$path'", 120_000)
+        } catch (t: Throwable) {
+            runCatching { ssh.exec("/usr/bin/owm-config backup-delete '$path'", 10_000) }
+            throw t
+        }
+    }
+
+    private fun parsePackages(json: String): List<PackageInfo> {
+        val a = JSONArray(json)
+        return buildList {
+            for (i in 0 until a.length()) {
+                val o = a.optJSONObject(i) ?: continue
+                val name = o.optString("name")
+                if (name.isBlank()) continue
+                add(
+                    PackageInfo(
+                        name = name,
+                        version = o.optString("version"),
+                        availableVersion = o.optString("available_version"),
+                        description = o.optString("description"),
+                        installed = o.optBoolean("installed"),
+                        upgradable = o.optBoolean("upgradable"),
+                        protected = o.optBoolean("protected")
+                    )
+                )
+            }
+        }
     }
 
     suspend fun appServices(): List<AppServiceInfo> {

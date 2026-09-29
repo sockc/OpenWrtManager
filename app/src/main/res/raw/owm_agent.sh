@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.5
+# OpenWrt Manager Agent V0.1.6
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.5"
+VERSION="0.1.6"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
@@ -399,6 +399,152 @@ cmd_service_logs() {
     logread 2>/dev/null | grep -i "$name" | tail -n "$lines"
 }
 
+
+valid_pkg() {
+    echo "$1" | grep -Eq '^[A-Za-z0-9_.+@-]+$'
+}
+
+pkg_protected() {
+    case "$1" in
+        base-files|busybox|libc|kernel|procd|ubus|ubusd|uci|netifd|firewall4|fw4|opkg|dropbear|dnsmasq|odhcpd|rpcd|uhttpd) return 0 ;;
+        kmod-*|libubus*|libuci*|libubox*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+cmd_pkg_status() {
+    command -v opkg >/dev/null 2>&1 || {
+        echo '{"manager":"","installed_count":0,"upgradable_count":0,"overlay_free_kb":0}'
+        return
+    }
+    installed="$(opkg list-installed 2>/dev/null | wc -l | tr -d ' ')"
+    upgradable="$(opkg list-upgradable 2>/dev/null | wc -l | tr -d ' ')"
+    dfline="$(df -kP /overlay 2>/dev/null | tail -n1)"
+    [ -n "$dfline" ] || dfline="$(df -kP / 2>/dev/null | tail -n1)"
+    free="$(echo "$dfline" | awk '{print $4}')"
+    printf '{"manager":"opkg","installed_count":%s,"upgradable_count":%s,"overlay_free_kb":%s}\n' \
+        "${installed:-0}" "${upgradable:-0}" "${free:-0}"
+}
+
+emit_pkg() {
+    name="$1"; version="$2"; available="$3"; desc="$4"; installed="$5"; upgradable="$6"
+    pkg_protected "$name" && protected=true || protected=false
+    printf '{"name":'; q "$name"
+    printf ',"version":'; q "$version"
+    printf ',"available_version":'; q "$available"
+    printf ',"description":'; q "$desc"
+    printf ',"installed":%s,"upgradable":%s,"protected":%s}' "$installed" "$upgradable" "$protected"
+}
+
+cmd_pkg_list_installed() {
+    first=1
+    printf '['
+    opkg list-installed 2>/dev/null | while IFS= read -r line; do
+        name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
+        version="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
+        [ -n "$name" ] || continue
+        [ $first -eq 1 ] || printf ','
+        first=0
+        emit_pkg "$name" "$version" "" "" true false
+    done
+    printf ']\n'
+}
+
+cmd_pkg_list_upgradable() {
+    first=1
+    printf '['
+    opkg list-upgradable 2>/dev/null | while IFS= read -r line; do
+        name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
+        old="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
+        new="$(printf '%s\n' "$line" | awk -F ' - ' '{print $3}')"
+        [ -n "$name" ] || continue
+        [ $first -eq 1 ] || printf ','
+        first=0
+        emit_pkg "$name" "$old" "$new" "" true true
+    done
+    printf ']\n'
+}
+
+cmd_pkg_search() {
+    query="${1:-}"
+    echo "$query" | grep -Eq '^[A-Za-z0-9_.+@-]{2,64}$' || {
+        echo '[]'
+        return
+    }
+
+    first=1
+    count=0
+    printf '['
+    opkg list 2>/dev/null | awk -v q="$query" 'index(tolower($0),tolower(q))>0 {print; n++; if(n>=80) exit}' | \
+    while IFS= read -r line; do
+        name="$(printf '%s\n' "$line" | awk -F ' - ' '{print $1}')"
+        version="$(printf '%s\n' "$line" | awk -F ' - ' '{print $2}')"
+        desc="$(printf '%s\n' "$line" | cut -d'-' -f3- | sed 's/^ //')"
+        [ -n "$name" ] || continue
+        installed=false
+        installed_ver=""
+        if opkg status "$name" 2>/dev/null | grep -q '^Status: .* installed'; then
+            installed=true
+            installed_ver="$(opkg status "$name" 2>/dev/null | awk -F': ' '/^Version:/{print $2; exit}')"
+        fi
+        [ $first -eq 1 ] || printf ','
+        first=0
+        emit_pkg "$name" "$installed_ver" "$version" "$desc" "$installed" false
+        count=$((count + 1))
+        [ "$count" -ge 80 ] && break
+    done
+    printf ']\n'
+}
+
+cmd_pkg_update() {
+    command -v opkg >/dev/null 2>&1 || { echo '{"ok":false,"error":"opkg not found"}' >&2; exit 2; }
+    if opkg update >/tmp/owm-opkg-update.log 2>&1; then
+        echo '{"ok":true}'
+    else
+        tail -n 30 /tmp/owm-opkg-update.log >&2
+        exit 3
+    fi
+}
+
+cmd_pkg_install() {
+    pkg="${1:-}"
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
+    if opkg install "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
+}
+
+cmd_pkg_upgrade() {
+    pkg="${1:-}"
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
+    pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
+    if opkg upgrade "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
+}
+
+cmd_pkg_remove() {
+    pkg="${1:-}"
+    valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}' >&2; exit 2; }
+    pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
+    if opkg status "$pkg" 2>/dev/null | grep -qi '^Essential: yes'; then
+        echo '{"ok":false,"error":"essential package"}' >&2
+        exit 5
+    fi
+    if opkg remove "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
+}
+
 cmd_block() {
     mac="$(echo "$1" | tr a-f A-F)"; valid_mac "$mac" || { echo '{"ok":false,"error":"invalid mac"}'; exit 2; }
     sec="$(rule_name "$mac")"
@@ -462,6 +608,14 @@ case "${1:-}" in
     app-services) cmd_app_services ;;
     processes) cmd_processes ;;
     service-logs) cmd_service_logs "${2:-}" "${3:-120}" ;;
+    pkg-status) cmd_pkg_status ;;
+    pkg-installed) cmd_pkg_list_installed ;;
+    pkg-upgradable) cmd_pkg_list_upgradable ;;
+    pkg-search) cmd_pkg_search "${2:-}" ;;
+    pkg-update) cmd_pkg_update ;;
+    pkg-install) cmd_pkg_install "${2:-}" ;;
+    pkg-upgrade) cmd_pkg_upgrade "${2:-}" ;;
+    pkg-remove) cmd_pkg_remove "${2:-}" ;;
     logs) lines="${2:-200}"; case "$lines" in *[!0-9]*) lines=200;; esac; logread -l "$lines" 2>/dev/null || logread 2>/dev/null | tail -n "$lines" ;;
     block) cmd_block "${2:-}" ;;
     unblock) cmd_unblock "${2:-}" ;;

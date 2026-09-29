@@ -26,6 +26,8 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         "logs" -> LogsScreen(vm, modifier) { page = "menu" }
         "terminal" -> TerminalScreen(vm, modifier) { page = "menu" }
         "firewall" -> FirewallScreen(vm, modifier) { page = "menu" }
+        "packages" -> PackageManagerScreen(vm, modifier) { page = "menu" }
+        "backup" -> BackupRestoreScreen(vm, modifier) { page = "menu" }
         else -> Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("更多", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(12.dp))
@@ -55,6 +57,8 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
             }
 
             MoreButton("防火墙与端口转发", "端口转发、流量规则、区域状态，支持 Safe Apply") { page = "firewall" }
+            MoreButton("软件包管理", "OPKG：已安装、搜索、安装、单包升级和安全卸载") { page = "packages" }
+            MoreButton("备份与恢复", "生成标准配置备份到手机，也可选择备份恢复") { page = "backup" }
             MoreButton("系统日志", "查看最近系统日志，敏感字段自动脱敏") { page = "logs" }
             MoreButton("SSH 命令终端", "高级操作，直接执行路由器命令") { page = "terminal" }
             MoreButton("重启网络", "重新加载网络接口") { vm.restartNetwork() }
@@ -63,7 +67,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.5：防火墙中心 / 端口转发增删改 / 流量规则开关 / 区域只读 / Safe Apply",
+                "V0.1.6：OPKG 软件包管理 / 单包升级保护 / 配置备份到手机 / sysupgrade 恢复",
                 style = MaterialTheme.typography.bodySmall
             )
         }
