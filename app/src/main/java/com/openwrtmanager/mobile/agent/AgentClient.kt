@@ -711,7 +711,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
 
     suspend fun serviceLogs(name: String, lines: Int = 120): String {
         val safe = name.replace(Regex("[^A-Za-z0-9_.@+-]"), "")
-        return ssh.exec("/usr/bin/owm-agent service-logs '$safe' ${lines.coerceIn(20, 300)}", 20_000)
+        return ssh.exec("/usr/bin/owm-agent service-logs '$safe' ${lines.coerceIn(20, 1000)}", 25_000)
     }
 
     suspend fun services(): List<ServiceInfo> {
