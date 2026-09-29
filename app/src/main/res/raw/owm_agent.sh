@@ -527,7 +527,7 @@ luci_slug_exists() {
     slug="$1"
     for file in /usr/share/luci/menu.d/*.json; do
         [ -f "$file" ] || continue
-        grep -q "\"admin/services/$slug\"" "$file" 2>/dev/null && return 0
+        grep -Fq "\"admin/services/$slug\"" "$file" 2>/dev/null && return 0
     done
     return 1
 }
@@ -552,8 +552,8 @@ luci_title_for_slug() {
     if command -v jsonfilter >/dev/null 2>&1; then
         for file in /usr/share/luci/menu.d/*.json; do
             [ -f "$file" ] || continue
-            grep -q ""admin/services/$slug"" "$file" 2>/dev/null || continue
-            title="$(jsonfilter -i "$file" -e "@[\"admin/services/$slug\"].title" 2>/dev/null | head -n1)"
+            grep -Fq "\"admin/services/$slug\"" "$file" 2>/dev/null || continue
+            title="$(jsonfilter -i "$file" -e "@[\\\"admin/services/$slug\\\"].title" 2>/dev/null | head -n1)"
             if [ -n "$title" ]; then
                 printf '%s' "$title"
                 return
@@ -598,14 +598,153 @@ luci_endpoint() {
 }
 
 service_installed_evidence() {
-    id="$1"; svc="$2"; slug="$3"
+    id="$1"; svc="$2"; slug="$3"; pkg_hint="$4"
     [ -n "$svc" ] && [ -x "/etc/init.d/$svc" ] && return 0
     [ -f "/etc/config/$id" ] && return 0
     [ -n "$svc" ] && [ -f "/etc/config/$svc" ] && return 0
     [ -n "$slug" ] && luci_slug_exists "$slug" && return 0
+    [ -n "$pkg_hint" ] && opkg status "$pkg_hint" 2>/dev/null | grep -q '^Status: .* installed' && return 0
     opkg status "luci-app-$id" 2>/dev/null | grep -q '^Status: .* installed' && return 0
     opkg status "$id" 2>/dev/null | grep -q '^Status: .* installed' && return 0
     return 1
+}
+
+installed_package_for() {
+    id="$1"; svc="$2"; pkg_hint="$3"
+    for pkg in "$pkg_hint" "luci-app-$id" "$id" "$svc"; do
+        [ -n "$pkg" ] || continue
+        if opkg status "$pkg" 2>/dev/null | grep -q '^Status: .* installed'; then
+            printf '%s' "$pkg"
+            return
+        fi
+    done
+}
+
+package_version() {
+    pkg="$1"
+    [ -n "$pkg" ] || return 0
+    opkg status "$pkg" 2>/dev/null | awk -F': ' '/^Version:/{print $2; exit}'
+}
+
+service_pid() {
+    svc="$1"
+    [ -n "$svc" ] || return 1
+    out="$(ubus call service list "{\"name\":\"$svc\"}" 2>/dev/null)"
+    pid="$(printf '%s\n' "$out" | sed -n 's/.*"pid":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' | head -n1)"
+    [ -n "$pid" ] || return 1
+    printf '%s' "$pid"
+}
+
+first_pid_for_app() {
+    id="$1"; svc="$2"; pattern="$3"
+
+    pid="$(service_pid "$svc" 2>/dev/null || true)"
+    [ -n "$pid" ] && { printf '%s' "$pid"; return 0; }
+
+    for d in /proc/[0-9]*; do
+        [ -r "$d/cmdline" ] || continue
+        cmd="$(tr '\000' ' ' < "$d/cmdline" 2>/dev/null)"
+        [ -n "$cmd" ] || continue
+        if { [ -n "$id" ] && printf '%s' "$cmd" | grep -qi "$id"; } || \
+           { [ -n "$svc" ] && printf '%s' "$cmd" | grep -qi "$svc"; }; then
+            printf '%s' "${d##*/}"
+            return 0
+        fi
+    done
+
+    case "$pattern" in
+        sing-box|mihomo|clash) return 1 ;;
+    esac
+    [ -n "$pattern" ] && first_pid_for "$pattern" 2>/dev/null
+}
+
+pid_uptime_seconds() {
+    pid="$1"
+    [ -r "/proc/$pid/stat" ] || return 0
+    total="$(awk '{print int($1)}' /proc/uptime 2>/dev/null)"
+    stat="$(cat "/proc/$pid/stat" 2>/dev/null)"
+    rest="${stat#*) }"
+    start_ticks="$(printf '%s\n' "$rest" | awk '{print $20}')"
+    clk="$(getconf CLK_TCK 2>/dev/null)"
+    [ -n "$clk" ] || clk=100
+    case "$start_ticks:$clk:$total" in
+        *[!0-9:]*|::*|*::*) return 0 ;;
+    esac
+    start_seconds=$((start_ticks / clk))
+    [ "$total" -ge "$start_seconds" ] && echo $((total - start_seconds))
+}
+
+listen_ports_for_pid() {
+    pid="$1"
+    [ -n "$pid" ] || return 0
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -lntp 2>/dev/null \
+            | grep "pid=$pid," \
+            | awk '{print $4}' \
+            | sed 's/.*://' \
+            | tr -cd '0-9\n' \
+            | awk '$1>=1 && $1<=65535 {print $1}' \
+            | sort -nu
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -lntp 2>/dev/null \
+            | awk -v p="/$pid" '$0 ~ p {print $4}' \
+            | sed 's/.*://' \
+            | tr -cd '0-9\n' \
+            | awk '$1>=1 && $1<=65535 {print $1}' \
+            | sort -nu
+    fi
+}
+
+http_scheme_for_port() {
+    port="$1"
+    case "$port" in
+        443|8443|9443) printf '%s' "https"; return ;;
+    esac
+
+    if command -v nc >/dev/null 2>&1; then
+        first="$(printf 'HEAD / HTTP/1.0\r\nHost: localhost\r\n\r\n' \
+            | nc -w 1 127.0.0.1 "$port" 2>/dev/null \
+            | head -n1)"
+        printf '%s' "$first" | grep -q '^HTTP/' && {
+            printf '%s' "http"
+            return
+        }
+    fi
+
+    case "$port" in
+        80|3000|8080|8000|8888|9090|9876) printf '%s' "http" ;;
+        *) printf '%s' "" ;;
+    esac
+}
+
+standalone_panel_for() {
+    id="$1"; ports="$2"
+    preferred=""
+
+    case "$id" in
+        ddns-go) preferred="9876" ;;
+        adguardhome) preferred="3000 80 8080" ;;
+    esac
+
+    for p in $preferred $ports; do
+        case " $ports " in *" $p "*) ;; *) continue ;; esac
+        scheme="$(http_scheme_for_port "$p")"
+        [ -n "$scheme" ] || continue
+        printf '%s %s' "$scheme" "$p"
+        return
+    done
+}
+
+system_service_name() {
+    case "$1" in
+        boot|cron|dnsmasq|done|dropbear|firewall|gpio_switch|led|log|network|odhcpd|rpcd|sysctl|sysfixtime|sysntpd|system|uhttpd|umount|urandom_seed|urngd|ubus|wan|watchcat)
+            return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 cmd_app_services() {
@@ -613,14 +752,26 @@ cmd_app_services() {
     luci_scheme="${1:-http}"
     luci_port="${2:-80}"
     seen="|"
+    seen_services="|"
     first=1
 
-    emit_app_service() {
-        id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"; slug="$6"
-        service_installed_evidence "$id" "$svc" "$slug" || return 0
+    emit_json_ports() {
+        ports="$1"
+        pfirst=1
+        printf '['
+        for p in $ports; do
+            [ "$pfirst" = "1" ] || printf ','
+            pfirst=0
+            printf '%s' "$p"
+        done
+        printf ']'
+    }
 
-        pid=""
-        [ -n "$pattern" ] && pid="$(first_pid_for "$pattern" 2>/dev/null || true)"
+    emit_app_service() {
+        id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"; slug="$6"; pkg_hint="$7"; web_hint="$8"
+        service_installed_evidence "$id" "$svc" "$slug" "$pkg_hint" || return 0
+
+        pid="$(first_pid_for_app "$id" "$svc" "$pattern" 2>/dev/null || true)"
         if [ -n "$svc" ] && service_running "$svc"; then
             running=true
         elif [ -n "$pid" ]; then
@@ -632,23 +783,49 @@ cmd_app_services() {
         if [ -n "$svc" ]; then
             service_enabled "$svc" && enabled=true || enabled=false
             [ -x "/etc/init.d/$svc" ] && controllable=true || controllable=false
+            seen_services="${seen_services}${svc}|"
         else
             enabled=false
             controllable=false
         fi
 
         rss=""
-        [ -n "$pid" ] && rss="$(pid_rss_kb "$pid")"
+        uptime=""
+        ports=""
+        if [ -n "$pid" ]; then
+            rss="$(pid_rss_kb "$pid")"
+            uptime="$(pid_uptime_seconds "$pid")"
+            ports="$(listen_ports_for_pid "$pid" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        fi
+
+        pkg="$(installed_package_for "$id" "$svc" "$pkg_hint")"
+        version="$(package_version "$pkg")"
         [ "$running" = "true" ] && health="healthy" || health="stopped"
 
         panel_available=false
         panel_path=""
         panel_kind=""
+        panel_port=0
+        panel_scheme="http"
+        panel_host="127.0.0.1"
+
         if [ -n "$slug" ] && luci_slug_exists "$slug"; then
             panel_available=true
             panel_path="/cgi-bin/luci/admin/services/$slug"
             panel_kind="luci"
+            panel_port="$luci_port"
+            panel_scheme="$luci_scheme"
             seen="${seen}${slug}|"
+        elif [ "$web_hint" = "1" ] && [ -n "$ports" ]; then
+            panel="$(standalone_panel_for "$id" "$ports")"
+            if [ -n "$panel" ]; then
+                set -- $panel
+                panel_scheme="$1"
+                panel_port="$2"
+                panel_path="/"
+                panel_kind="standalone"
+                panel_available=true
+            fi
         fi
 
         [ $first -eq 1 ] || printf ','
@@ -658,19 +835,23 @@ cmd_app_services() {
         printf ',"init_service":'; q "$svc"
         printf ',"controllable":%s,"running":%s,"enabled":%s' "$controllable" "$running" "$enabled"
         printf ',"health":'; q "$health"
-        printf ',"version":""'
+        printf ',"version":'; q "$version"
+        printf ',"package_name":'; q "$pkg"
         printf ',"pid":'
         [ -n "$pid" ] && printf '%s' "$pid" || printf 'null'
+        printf ',"uptime_seconds":'
+        [ -n "$uptime" ] && printf '%s' "$uptime" || printf 'null'
         printf ',"cpu_percent":null'
         printf ',"memory_kb":'
         [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
-        printf ',"ports":[]'
+        printf ',"ports":'; emit_json_ports "$ports"
         printf ',"detail":'; q "$detail"
         printf ',"panel_available":%s' "$panel_available"
         printf ',"panel_path":'; q "$panel_path"
-        printf ',"panel_port":%s' "$luci_port"
-        printf ',"panel_scheme":'; q "$luci_scheme"
+        printf ',"panel_port":%s' "$panel_port"
+        printf ',"panel_scheme":'; q "$panel_scheme"
         printf ',"panel_kind":'; q "$panel_kind"
+        printf ',"panel_host":'; q "$panel_host"
         printf '}'
     }
 
@@ -684,35 +865,86 @@ cmd_app_services() {
         first=0
         printf '{"id":'; q "panel-$slug"
         printf ',"display_name":'; q "$label"
-        printf ',"init_service":""'
-        printf ',"controllable":false,"running":true,"enabled":false'
-        printf ',"health":"panel","version":"","pid":null,"cpu_percent":null,"memory_kb":null,"ports":[]'
+        printf ',"init_service":"","controllable":false,"running":true,"enabled":false'
+        printf ',"health":"panel","version":"","package_name":"","pid":null,"uptime_seconds":null'
+        printf ',"cpu_percent":null,"memory_kb":null,"ports":[]'
         printf ',"detail":"LuCI 功能面板"'
         printf ',"panel_available":true'
         printf ',"panel_path":'; q "/cgi-bin/luci/admin/services/$slug"
         printf ',"panel_port":%s' "$luci_port"
         printf ',"panel_scheme":'; q "$luci_scheme"
-        printf ',"panel_kind":"luci"}'
+        printf ',"panel_kind":"luci","panel_host":"127.0.0.1"}'
+    }
+
+    emit_generic_web_service() {
+        svc="$1"
+        system_service_name "$svc" && return 0
+        case "$seen_services" in *"|$svc|"*) return 0 ;; esac
+
+        pid="$(service_pid "$svc" 2>/dev/null || true)"
+        [ -n "$pid" ] || pid="$(first_pid_for_app "$svc" "$svc" "$svc" 2>/dev/null || true)"
+        [ -n "$pid" ] || return 0
+
+        ports="$(listen_ports_for_pid "$pid" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        [ -n "$ports" ] || return 0
+
+        panel=""
+        for p in $ports; do
+            scheme="$(http_scheme_for_port "$p")"
+            [ -n "$scheme" ] || continue
+            panel="$scheme $p"
+            break
+        done
+        [ -n "$panel" ] || return 0
+
+        set -- $panel
+        panel_scheme="$1"
+        panel_port="$2"
+        service_enabled "$svc" && enabled=true || enabled=false
+        service_running "$svc" && running=true || running=false
+        rss="$(pid_rss_kb "$pid")"
+        uptime="$(pid_uptime_seconds "$pid")"
+        pkg="$(installed_package_for "$svc" "$svc" "")"
+        version="$(package_version "$pkg")"
+
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"id":'; q "auto-$svc"
+        printf ',"display_name":'; q "$svc"
+        printf ',"init_service":'; q "$svc"
+        printf ',"controllable":true,"running":%s,"enabled":%s' "$running" "$enabled"
+        printf ',"health":"healthy","version":'; q "$version"
+        printf ',"package_name":'; q "$pkg"
+        printf ',"pid":%s,"uptime_seconds":' "$pid"
+        [ -n "$uptime" ] && printf '%s' "$uptime" || printf 'null'
+        printf ',"cpu_percent":null,"memory_kb":'
+        [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
+        printf ',"ports":'; emit_json_ports "$ports"
+        printf ',"detail":"自动发现 Web 服务"'
+        printf ',"panel_available":true,"panel_path":"/","panel_port":%s' "$panel_port"
+        printf ',"panel_scheme":'; q "$panel_scheme"
+        printf ',"panel_kind":"standalone","panel_host":"127.0.0.1"}'
+        seen_services="${seen_services}${svc}|"
     }
 
     printf '['
 
-    emit_app_service "nikki" "Nikki" "nikki" "mihomo" "代理服务" "nikki"
-    emit_app_service "homeproxy" "HomeProxy" "homeproxy" "sing-box" "代理服务" "homeproxy"
-    emit_app_service "mosdns" "MosDNS" "mosdns" "mosdns" "DNS 服务" "mosdns"
-    emit_app_service "ddns-go" "DDNS-Go" "ddns-go" "ddns-go" "动态域名" "ddns-go"
-    emit_app_service "nezha-agent" "Nezha Agent" "nezha-agent" "nezha-agent" "监控探针" "nezha-agent"
-    emit_app_service "miniupnpd" "UPnP IGD 和 PCP" "miniupnpd" "miniupnpd" "UPnP / PCP 服务" "upnp"
-    emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务" "openclash"
-    emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务" "passwall"
-    emit_app_service "passwall2" "PassWall2" "passwall2" "sing-box" "代理服务" "passwall2"
-    emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤" "adguardhome"
-    emit_app_service "smartdns" "SmartDNS" "smartdns" "smartdns" "DNS 服务" "smartdns"
-    emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务" ""
-    emit_app_service "zerotier" "ZeroTier" "zerotier" "zerotier-one" "组网服务" ""
-    emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务" ""
-    emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享" ""
-    emit_app_service "samba" "Samba" "samba" "smbd" "文件共享" ""
+    emit_app_service "nikki" "Nikki" "nikki" "mihomo" "代理服务" "nikki" "luci-app-nikki" "0"
+    emit_app_service "homeproxy" "HomeProxy" "homeproxy" "sing-box" "代理服务" "homeproxy" "luci-app-homeproxy" "0"
+    emit_app_service "mosdns" "MosDNS" "mosdns" "mosdns" "DNS 服务" "mosdns" "luci-app-mosdns" "0"
+    emit_app_service "ddns-go" "DDNS-Go" "ddns-go" "ddns-go" "动态域名" "ddns-go" "ddns-go" "1"
+    emit_app_service "nezha-agent" "Nezha Agent" "nezha-agent" "nezha-agent" "监控探针" "nezha-agent" "nezha-agent" "0"
+    emit_app_service "miniupnpd" "UPnP IGD 和 PCP" "miniupnpd" "miniupnpd" "UPnP / PCP 服务" "upnp" "miniupnpd" "0"
+    emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务" "openclash" "luci-app-openclash" "0"
+    emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务" "passwall" "luci-app-passwall" "0"
+    emit_app_service "passwall2" "PassWall2" "passwall2" "sing-box" "代理服务" "passwall2" "luci-app-passwall2" "0"
+    emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤" "adguardhome" "adguardhome" "1"
+    emit_app_service "smartdns" "SmartDNS" "smartdns" "smartdns" "DNS 服务" "smartdns" "smartdns" "0"
+    emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务" "" "tailscale" "0"
+    emit_app_service "zerotier" "ZeroTier" "zerotier" "zerotier-one" "组网服务" "" "zerotier" "0"
+    emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务" "" "dockerd" "0"
+    emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享" "" "samba4-server" "0"
+    emit_app_service "samba" "Samba" "samba" "smbd" "文件共享" "" "samba36-server" "0"
 
     for file in /usr/share/luci/menu.d/*.json; do
         [ -f "$file" ] || continue
@@ -724,6 +956,14 @@ cmd_app_services() {
         done
     done | sort -u | while IFS= read -r slug; do
         emit_panel_only "$slug"
+    done
+
+    # Discover third-party standalone Web services that have an init.d service
+    # and an actual HTTP(S)-like listening port. Common system daemons are excluded.
+    for init in /etc/init.d/*; do
+        [ -x "$init" ] || continue
+        svc="${init##*/}"
+        emit_generic_web_service "$svc"
     done
 
     printf ']\n'
