@@ -14,6 +14,11 @@ private enum class Tab(val title: String) { HOME("首页"), DEVICES("设备"), N
 fun ManagerScaffold(vm: MainViewModel) {
     var tab by remember { mutableStateOf(Tab.HOME) }
     val agentInstalled by vm.agentInstalled.collectAsState()
+    val packageRequest by vm.packageManagerRequest.collectAsState()
+
+    LaunchedEffect(packageRequest) {
+        if (!packageRequest.isNullOrBlank()) tab = Tab.MORE
+    }
 
     Scaffold(
         bottomBar = {
@@ -44,7 +49,12 @@ fun ManagerScaffold(vm: MainViewModel) {
                 Tab.DEVICES -> DevicesScreen(vm, Modifier.padding(padding))
                 Tab.NETWORK -> NetworkScreen(vm, Modifier.padding(padding))
                 Tab.SERVICES -> ServicesScreen(vm, Modifier.padding(padding))
-                Tab.MORE -> MoreScreen(vm, Modifier.padding(padding))
+                Tab.MORE -> MoreScreen(
+                    vm = vm,
+                    modifier = Modifier.padding(padding),
+                    packageQuery = packageRequest,
+                    onPackageQueryConsumed = vm::consumePackageManagerRequest
+                )
             }
         }
     }
