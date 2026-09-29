@@ -32,7 +32,8 @@ firewall_reload() {
 
 cmd_install() {
     mkdir -p "$BASE"
-    touch "$BLOCKED" "$SCHEDULE_BLOCKED" "$ALIASES"
+    touch "$BLOCKED" "$SCHEDULE_BLOCKED" "$ALIASES" /etc/sysupgrade.conf
+    grep -qxF '/etc/openwrt-manager/' /etc/sysupgrade.conf 2>/dev/null || echo '/etc/openwrt-manager/' >> /etc/sysupgrade.conf
     if [ "$0" != "$SELF" ]; then cp "$0" "$SELF"; fi
     chmod 700 "$SELF"
     printf '{"ok":true,"version":"%s"}\n' "$VERSION"
