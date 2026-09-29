@@ -8,6 +8,7 @@ import com.openwrtmanager.mobile.data.SecureStore
 import com.openwrtmanager.mobile.model.*
 import com.openwrtmanager.mobile.ssh.SshManager
 import com.openwrtmanager.mobile.update.UpdateChecker
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -44,6 +45,19 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val safeApply: StateFlow<SafeApplyState> = _safeApply.asStateFlow()
     private val _firewall = MutableStateFlow(FirewallSnapshot())
     val firewall: StateFlow<FirewallSnapshot> = _firewall.asStateFlow()
+
+    private val _traffic = MutableStateFlow(TrafficSnapshot())
+    val traffic: StateFlow<TrafficSnapshot> = _traffic.asStateFlow()
+    private val _wanRxHistory = MutableStateFlow<List<Long>>(emptyList())
+    val wanRxHistory: StateFlow<List<Long>> = _wanRxHistory.asStateFlow()
+    private val _wanTxHistory = MutableStateFlow<List<Long>>(emptyList())
+    val wanTxHistory: StateFlow<List<Long>> = _wanTxHistory.asStateFlow()
+    private val _diagnostics = MutableStateFlow(DiagnosticSummary())
+    val diagnostics: StateFlow<DiagnosticSummary> = _diagnostics.asStateFlow()
+    private val _health = MutableStateFlow<List<HealthItem>>(emptyList())
+    val health: StateFlow<List<HealthItem>> = _health.asStateFlow()
+    private var realtimeJob: Job? = null
+    private var previousTraffic: TrafficSnapshot? = null
 
     private val _packageStatus = MutableStateFlow(PackageManagerStatus())
     val packageStatus: StateFlow<PackageManagerStatus> = _packageStatus.asStateFlow()
@@ -110,6 +124,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _devices.value = emptyList()
         _networkConfig.value = null
         _safeApply.value = SafeApplyState()
+        stopRealtimeMonitoring()
+        _traffic.value = TrafficSnapshot()
+        _wanRxHistory.value = emptyList()
+        _wanTxHistory.value = emptyList()
+        _diagnostics.value = DiagnosticSummary()
+        _health.value = emptyList()
+        previousTraffic = null
     }
 
     fun installAgent() = viewModelScope.launch {
@@ -127,6 +148,152 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _network.value = agent.network()
             _wifi.value = agent.wifi()
             _devices.value = agent.devices()
+            runCatching { _appServices.value = agent.appServices() }
+            runCatching { updateTrafficSample() }
+            recomputeHealth()
+        }
+    }
+
+
+    fun startRealtimeMonitoring() {
+        if (realtimeJob?.isActive == true) return
+        realtimeJob = viewModelScope.launch {
+            var cycle = 0
+            while (_connected.value) {
+                runCatching { updateTrafficSample() }
+                if (cycle % 2 == 0) {
+                    runCatching { _status.value = agent.status() }
+                    runCatching { _network.value = agent.network() }
+                    recomputeHealth()
+                }
+                cycle++
+                delay(3000)
+            }
+        }
+    }
+
+    fun stopRealtimeMonitoring() {
+        realtimeJob?.cancel()
+        realtimeJob = null
+    }
+
+    private suspend fun updateTrafficSample() {
+        val current = agent.traffic()
+        val previous = previousTraffic
+        val dt = if (previous != null) current.timestampMs - previous.timestampMs else 0L
+
+        var rxBps = 0L
+        var txBps = 0L
+        if (previous != null && dt > 0 && current.wanDevice.isNotBlank()) {
+            val nowWan = current.interfaces.firstOrNull { it.name == current.wanDevice }
+            val oldWan = previous.interfaces.firstOrNull { it.name == current.wanDevice }
+            if (nowWan != null && oldWan != null) {
+                val rxDelta = (nowWan.rxBytes - oldWan.rxBytes).coerceAtLeast(0)
+                val txDelta = (nowWan.txBytes - oldWan.txBytes).coerceAtLeast(0)
+                rxBps = rxDelta * 1000L / dt
+                txBps = txDelta * 1000L / dt
+            }
+        }
+
+        val rated = current.copy(wanRxBps = rxBps, wanTxBps = txBps)
+        previousTraffic = current
+        _traffic.value = rated
+        _wanRxHistory.value = (_wanRxHistory.value + rxBps).takeLast(300)
+        _wanTxHistory.value = (_wanTxHistory.value + txBps).takeLast(300)
+    }
+
+    fun runDiagnostics() = viewModelScope.launch {
+        task {
+            _diagnostics.value = agent.diagnostics()
+            recomputeHealth()
+        }
+    }
+
+    private fun recomputeHealth() {
+        val items = mutableListOf<HealthItem>()
+        val s = _status.value
+        val n = _network.value
+
+        if (n != null && !n.wanUp) {
+            items += HealthItem("critical", "WAN 未连接", "检查上联、PPPoE 或 DHCP 状态")
+        }
+
+        if (s != null && s.memTotalKb > 0) {
+            val availablePercent = s.memAvailableKb * 100 / s.memTotalKb
+            if (availablePercent < 10) {
+                items += HealthItem("warn", "可用内存偏低", "当前可用约 ${s.memAvailableKb / 1024} MB")
+            }
+        }
+
+        if (s != null && s.rootFreeKb in 1 until 10_240) {
+            items += HealthItem("warn", "存储空间偏低", "Overlay/根目录可用不足 10 MB")
+        }
+
+        val temp = s?.temperatureC
+        if (temp != null && temp >= 80.0) {
+            items += HealthItem("warn", "温度较高", "当前约 %.1f°C".format(temp))
+        }
+
+        if (_safeApply.value.active) {
+            items += HealthItem("warn", "配置等待确认", "Safe Apply 尚未确认")
+        }
+
+        val stoppedEnabledServices = _appServices.value.count { it.enabled && !it.running }
+        if (stoppedEnabledServices > 0) {
+            items += HealthItem("warn", "应用服务异常", "$stoppedEnabledServices 个已启用服务当前未运行")
+        }
+
+        _diagnostics.value.checks.filter { it.status == "fail" }.forEach {
+            items += HealthItem("critical", it.title, it.detail)
+        }
+
+        if (items.isEmpty()) {
+            items += HealthItem("ok", "状态正常", "未发现明显异常")
+        }
+        _health.value = items
+    }
+
+    fun buildDiagnosticReport(): String {
+        val s = _status.value
+        val n = _network.value
+        val t = _traffic.value
+        val online = _devices.value.count { it.online }
+
+        return buildString {
+            appendLine("OpenWrt Manager Diagnostic Report")
+            appendLine("App: 0.1.7")
+            appendLine()
+            appendLine("[System]")
+            appendLine("Model: ${s?.model.orEmpty()}")
+            appendLine("Firmware: ${s?.firmware.orEmpty()}")
+            appendLine("Kernel: ${s?.kernel.orEmpty()}")
+            appendLine("Arch: ${s?.arch.orEmpty()}")
+            appendLine("UptimeSeconds: ${s?.uptimeSeconds ?: 0}")
+            appendLine("CPU: ${s?.cpuPercent ?: 0}%")
+            appendLine("MemAvailableKB: ${s?.memAvailableKb ?: 0}")
+            appendLine("RootFreeKB: ${s?.rootFreeKb ?: 0}")
+            appendLine("TemperatureC: ${s?.temperatureC ?: "n/a"}")
+            appendLine()
+            appendLine("[Network]")
+            appendLine("WANUp: ${n?.wanUp ?: false}")
+            appendLine("WANProto: ${n?.wanProto.orEmpty()}")
+            appendLine("WANDevice: ${t.wanDevice}")
+            appendLine("WANRxBps: ${t.wanRxBps}")
+            appendLine("WANTxBps: ${t.wanTxBps}")
+            appendLine("OnlineDevices: $online")
+            appendLine()
+            appendLine("[Interfaces]")
+            t.interfaces.forEach { i ->
+                appendLine("${i.name}: up=${i.up}, rx=${i.rxBytes}, tx=${i.txBytes}, rxErr=${i.rxErrors}, txErr=${i.txErrors}, rxDrop=${i.rxDropped}, txDrop=${i.txDropped}")
+            }
+            appendLine()
+            appendLine("[Health]")
+            _health.value.forEach { appendLine("${it.level}: ${it.title} - ${it.detail}") }
+            appendLine()
+            appendLine("[Diagnostics]")
+            _diagnostics.value.checks.forEach { appendLine("${it.status}: ${it.title} - ${it.detail}") }
+            appendLine()
+            appendLine("Sensitive fields such as passwords, tokens, MAC addresses, SSIDs and IP addresses are intentionally omitted.")
         }
     }
 
@@ -492,6 +659,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _devices.value = agent.devices()
         _network.value = agent.network()
         _wifi.value = agent.wifi()
+        runCatching { updateTrafficSample() }
+        recomputeHealth()
     }
 
     private suspend fun task(block: suspend () -> Unit) {

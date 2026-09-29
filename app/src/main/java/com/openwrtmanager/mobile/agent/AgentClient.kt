@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.6" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.7" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -62,6 +62,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         state = o.optString("state"),
                         connectionType = o.optString("type", "unknown"),
                         blocked = o.optBoolean("blocked", false),
+                        online = o.optBoolean("online", false),
                         band = o.optString("band"),
                         signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm")
                     )
@@ -108,6 +109,55 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
             lanIpv4 = o.optString("lan_ipv4"),
             lanIpv6 = o.optString("lan_ipv6")
         )
+    }
+
+
+    suspend fun traffic(): TrafficSnapshot {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent traffic", 15_000))
+        val interfaces = buildList {
+            val a = o.optJSONArray("interfaces") ?: JSONArray()
+            for (i in 0 until a.length()) {
+                val x = a.optJSONObject(i) ?: continue
+                add(
+                    InterfaceTraffic(
+                        name = x.optString("name"),
+                        up = x.optBoolean("up"),
+                        rxBytes = x.optLong("rx_bytes"),
+                        txBytes = x.optLong("tx_bytes"),
+                        rxPackets = x.optLong("rx_packets"),
+                        txPackets = x.optLong("tx_packets"),
+                        rxErrors = x.optLong("rx_errors"),
+                        txErrors = x.optLong("tx_errors"),
+                        rxDropped = x.optLong("rx_dropped"),
+                        txDropped = x.optLong("tx_dropped")
+                    )
+                )
+            }
+        }
+        return TrafficSnapshot(
+            timestampMs = System.currentTimeMillis(),
+            wanDevice = o.optString("wan_device"),
+            interfaces = interfaces
+        )
+    }
+
+    suspend fun diagnostics(): DiagnosticSummary {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent diagnostics", 20_000))
+        val checks = buildList {
+            val a = o.optJSONArray("checks") ?: JSONArray()
+            for (i in 0 until a.length()) {
+                val x = a.optJSONObject(i) ?: continue
+                add(
+                    DiagnosticCheck(
+                        id = x.optString("id"),
+                        title = x.optString("title"),
+                        status = x.optString("status"),
+                        detail = x.optString("detail")
+                    )
+                )
+            }
+        }
+        return DiagnosticSummary(checks)
     }
 
     suspend fun wifi(): List<WifiNetwork> {

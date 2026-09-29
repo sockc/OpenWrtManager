@@ -31,6 +31,7 @@ data class DeviceInfo(
     val state: String,
     val connectionType: String,
     val blocked: Boolean,
+    val online: Boolean = false,
     val band: String = "",
     val signalDbm: Int? = null
 )
@@ -196,4 +197,43 @@ data class BackupInfo(
     val filename: String,
     val sizeBytes: Long,
     val includesPackageList: Boolean = true
+)
+
+
+data class InterfaceTraffic(
+    val name: String,
+    val up: Boolean,
+    val rxBytes: Long = 0,
+    val txBytes: Long = 0,
+    val rxPackets: Long = 0,
+    val txPackets: Long = 0,
+    val rxErrors: Long = 0,
+    val txErrors: Long = 0,
+    val rxDropped: Long = 0,
+    val txDropped: Long = 0
+)
+
+data class TrafficSnapshot(
+    val timestampMs: Long = 0,
+    val wanDevice: String = "",
+    val interfaces: List<InterfaceTraffic> = emptyList(),
+    val wanRxBps: Long = 0,
+    val wanTxBps: Long = 0
+)
+
+data class DiagnosticCheck(
+    val id: String,
+    val title: String,
+    val status: String,
+    val detail: String = ""
+)
+
+data class DiagnosticSummary(
+    val checks: List<DiagnosticCheck> = emptyList()
+)
+
+data class HealthItem(
+    val level: String,
+    val title: String,
+    val detail: String = ""
 )

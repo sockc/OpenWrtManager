@@ -103,3 +103,14 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Standard OpenWrt configuration backups are generated with sysupgrade and exported to the Android document picker.
 - When supported, backups include the installed-package list via `sysupgrade -k -b`; older variants fall back to `sysupgrade -b`.
 - Restore accepts a selected OpenWrt `.tar.gz` backup, validates the archive and path layout, then uses `sysupgrade -r`. A reboot is required after restore.
+
+
+## V0.1.7 Realtime Monitoring and Diagnostics
+
+- Realtime WAN byte-rate sampling uses interface counters from `/sys/class/net/*/statistics` and computes rates in the Android app, avoiding long-running router sampling commands.
+- Home dashboard shows current WAN download/upload rates plus rolling 1-, 5-, and 15-minute averages.
+- Device presence now distinguishes verified online clients from cached neighbour entries; Wi-Fi association or active neighbour states are treated as online, while STALE entries are shown as recently seen.
+- Network diagnostics test WAN state, default route, gateway reachability, public-IP reachability, local DNS resolution, and pending Safe Apply transactions.
+- Interface diagnostics show RX/TX counters, errors, and dropped packets.
+- Health checks surface WAN failures, low memory, low storage, high temperature, and pending Safe Apply state.
+- Diagnostic reports intentionally omit passwords, tokens, SSIDs, MAC addresses, and IP addresses.

@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.6
+# OpenWrt Manager Agent V0.1.7
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.6"
+VERSION="0.1.7"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
@@ -143,12 +143,18 @@ cmd_devices() {
         fi
 
         blocked=false; blocked_has "$mac_upper" && blocked=true
+        online=false
+        if [ "$type" = "wifi" ]; then
+            online=true
+        else
+            case "$state" in REACHABLE|DELAY|PROBE) online=true ;; esac
+        fi
         [ $first -eq 1 ] || printf ','; first=0
         printf '{"ip":'; q "$ip"; printf ',"mac":'; q "$mac_upper"; printf ',"hostname":'; q "$hostname"
         printf ',"interface":'; q "$ifname"; printf ',"state":'; q "$state"; printf ',"type":'; q "$type"
         printf ',"band":'; q "$band"; printf ',"signal_dbm":'
         [ -n "$signal" ] && printf '%s' "$signal" || printf 'null'
-        printf ',"blocked":%s}' "$blocked"
+        printf ',"blocked":%s,"online":%s}' "$blocked" "$online"
     done < "$tmp"
     rm -f "$tmp"
     printf ']\n'
@@ -193,6 +199,106 @@ cmd_network() {
     printf ',"wan_uptime":%s,"wan_up":%s,"wan_gateway":' "${wan_uptime:-0}" "$wan_up"; q "$gateway"
     printf ',"wan_dns":'; print_dns_array "$wan"
     printf ',"lan_device":'; q "$lan_dev"; printf ',"lan_ipv4":'; q "$lan4"; printf ',"lan_ipv6":'; q "$lan6"; printf '}\n'
+}
+
+
+cmd_traffic() {
+    wan="$(ubus call network.interface.wan status 2>/dev/null || echo '{}')"
+    wan_dev="$(printf '%s' "$wan" | jsonfilter -e '@.l3_device' 2>/dev/null | head -n1)"
+    [ -n "$wan_dev" ] || wan_dev="$(printf '%s' "$wan" | jsonfilter -e '@.device' 2>/dev/null | head -n1)"
+
+    printf '{"wan_device":'
+    q "$wan_dev"
+    printf ',"interfaces":['
+    first=1
+    for d in /sys/class/net/*; do
+        [ -d "$d" ] || continue
+        name="${d##*/}"
+        [ "$name" = "lo" ] && continue
+
+        state="$(cat "$d/operstate" 2>/dev/null)"
+        [ "$state" = "up" ] && up=true || up=false
+
+        rx_bytes="$(cat "$d/statistics/rx_bytes" 2>/dev/null)"; [ -n "$rx_bytes" ] || rx_bytes=0
+        tx_bytes="$(cat "$d/statistics/tx_bytes" 2>/dev/null)"; [ -n "$tx_bytes" ] || tx_bytes=0
+        rx_packets="$(cat "$d/statistics/rx_packets" 2>/dev/null)"; [ -n "$rx_packets" ] || rx_packets=0
+        tx_packets="$(cat "$d/statistics/tx_packets" 2>/dev/null)"; [ -n "$tx_packets" ] || tx_packets=0
+        rx_errors="$(cat "$d/statistics/rx_errors" 2>/dev/null)"; [ -n "$rx_errors" ] || rx_errors=0
+        tx_errors="$(cat "$d/statistics/tx_errors" 2>/dev/null)"; [ -n "$tx_errors" ] || tx_errors=0
+        rx_dropped="$(cat "$d/statistics/rx_dropped" 2>/dev/null)"; [ -n "$rx_dropped" ] || rx_dropped=0
+        tx_dropped="$(cat "$d/statistics/tx_dropped" 2>/dev/null)"; [ -n "$tx_dropped" ] || tx_dropped=0
+
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{"name":'; q "$name"
+        printf ',"up":%s,"rx_bytes":%s,"tx_bytes":%s' "$up" "$rx_bytes" "$tx_bytes"
+        printf ',"rx_packets":%s,"tx_packets":%s' "$rx_packets" "$tx_packets"
+        printf ',"rx_errors":%s,"tx_errors":%s' "$rx_errors" "$tx_errors"
+        printf ',"rx_dropped":%s,"tx_dropped":%s}' "$rx_dropped" "$tx_dropped"
+    done
+    printf ']}\n'
+}
+
+diag_item() {
+    id="$1"; title="$2"; status="$3"; detail="$4"
+    [ "${diag_first:-1}" = "1" ] || printf ','
+    diag_first=0
+    printf '{"id":'; q "$id"
+    printf ',"title":'; q "$title"
+    printf ',"status":'; q "$status"
+    printf ',"detail":'; q "$detail"
+    printf '}'
+}
+
+cmd_diagnostics() {
+    wan="$(ubus call network.interface.wan status 2>/dev/null || echo '{}')"
+    wan_up="$(printf '%s' "$wan" | jsonfilter -e '@.up' 2>/dev/null | head -n1)"
+    gateway="$(ip route show default 2>/dev/null | awk '/default/{print $3; exit}')"
+
+    printf '{"checks":['
+    diag_first=1
+
+    if [ "$wan_up" = "true" ]; then
+        diag_item "wan" "WAN 接口" "ok" "WAN 接口已连接"
+    else
+        diag_item "wan" "WAN 接口" "fail" "WAN 接口未连接"
+    fi
+
+    if [ -n "$gateway" ]; then
+        diag_item "route" "默认路由" "ok" "已检测到默认网关"
+        if ping -c 1 -W 2 "$gateway" >/dev/null 2>&1; then
+            diag_item "gateway" "上联网关" "ok" "默认网关可达"
+        else
+            diag_item "gateway" "上联网关" "fail" "默认网关无响应"
+        fi
+    else
+        diag_item "route" "默认路由" "fail" "没有默认路由"
+        diag_item "gateway" "上联网关" "warn" "无法测试：没有默认网关"
+    fi
+
+    if ping -c 1 -W 2 1.1.1.1 >/dev/null 2>&1; then
+        diag_item "internet" "互联网连通" "ok" "公网 IP 连通正常"
+    else
+        diag_item "internet" "互联网连通" "fail" "公网 IP 测试失败"
+    fi
+
+    if command -v nslookup >/dev/null 2>&1; then
+        if nslookup openwrt.org 127.0.0.1 >/dev/null 2>&1; then
+            diag_item "dns" "DNS 解析" "ok" "本机 DNS 解析正常"
+        else
+            diag_item "dns" "DNS 解析" "fail" "本机 DNS 解析失败"
+        fi
+    else
+        diag_item "dns" "DNS 解析" "warn" "系统没有 nslookup，跳过测试"
+    fi
+
+    if [ -f /etc/openwrt-manager/safe-apply/active ]; then
+        diag_item "safe_apply" "配置事务" "warn" "存在等待确认的 Safe Apply"
+    else
+        diag_item "safe_apply" "配置事务" "ok" "没有待确认配置事务"
+    fi
+
+    printf ']}\n'
 }
 
 uci_get() { uci -q get "$1" 2>/dev/null || true; }
@@ -603,6 +709,8 @@ case "${1:-}" in
     status) cmd_status ;;
     devices) cmd_devices ;;
     network) cmd_network ;;
+    traffic) cmd_traffic ;;
+    diagnostics) cmd_diagnostics ;;
     wifi) cmd_wifi ;;
     services) cmd_services ;;
     app-services) cmd_app_services ;;

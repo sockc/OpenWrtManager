@@ -13,21 +13,55 @@ import com.openwrtmanager.mobile.ui.MainViewModel
 @Composable
 fun DevicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val devices by vm.devices.collectAsState()
+    val online = devices.filter { it.online }
+    val recent = devices.filter { !it.online }
+
     LaunchedEffect(Unit) { vm.refreshDevices() }
 
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
-                Text("在线设备", style = MaterialTheme.typography.headlineSmall)
-                Text("${devices.size} 台", style = MaterialTheme.typography.bodySmall)
+                Text("设备", style = MaterialTheme.typography.headlineSmall)
+                Text(
+                    "在线 ${online.size} · 最近发现 ${recent.size}",
+                    style = MaterialTheme.typography.bodySmall
+                )
             }
             TextButton(onClick = vm::refreshDevices) { Text("刷新") }
         }
 
         Spacer(Modifier.height(8.dp))
         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(devices) { d -> DeviceCard(d, vm) }
+            item {
+                Text("当前在线", style = MaterialTheme.typography.titleMedium)
+            }
+            if (online.isEmpty()) {
+                item { EmptyDeviceCard("暂无已验证在线设备") }
+            } else {
+                items(online, key = { "online:" + it.mac }) { d -> DeviceCard(d, vm) }
+            }
+
+            item {
+                Spacer(Modifier.height(6.dp))
+                Text("最近发现", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "STALE 等邻居缓存不再直接算作在线。",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            if (recent.isEmpty()) {
+                item { EmptyDeviceCard("暂无历史邻居") }
+            } else {
+                items(recent, key = { "recent:" + it.mac }) { d -> DeviceCard(d, vm) }
+            }
         }
+    }
+}
+
+@Composable
+private fun EmptyDeviceCard(text: String) {
+    Card(Modifier.fillMaxWidth()) {
+        Text(text, modifier = Modifier.padding(14.dp), style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -42,7 +76,15 @@ private fun DeviceCard(d: DeviceInfo, vm: MainViewModel) {
                 }
                 AssistChip(
                     onClick = {},
-                    label = { Text(if (d.blocked) "已断网" else "在线") }
+                    label = {
+                        Text(
+                            when {
+                                d.blocked -> "已断网"
+                                d.online -> "在线"
+                                else -> "最近发现"
+                            }
+                        )
+                    }
                 )
             }
 
