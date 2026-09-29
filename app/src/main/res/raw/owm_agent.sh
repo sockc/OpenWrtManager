@@ -427,6 +427,18 @@ cmd_service() {
     name="${1:-}"; action="${2:-}"; valid_name "$name" || exit 2
     case "$action" in start|stop|restart|reload|enable|disable) ;; *) exit 2;; esac
     [ -x "/etc/init.d/$name" ] || exit 3
+
+    case "$name" in
+        network|firewall|dropbear|dnsmasq|odhcpd|ubus|rpcd|uhttpd)
+            case "$action" in
+                stop|restart|reload|disable)
+                    echo '{"ok":false,"error":"protected service"}'
+                    exit 4
+                    ;;
+            esac
+            ;;
+    esac
+
     "/etc/init.d/$name" "$action" >/dev/null 2>&1
     printf '{"ok":true}\n'
 }
