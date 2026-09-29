@@ -18,13 +18,20 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val appServices by vm.appServices.collectAsState()
     val processes by vm.processes.collectAsState()
     val serviceLogs by vm.serviceLogs.collectAsState()
+    val panel by vm.appPanel.collectAsState()
     var logService by remember { mutableStateOf<AppServiceInfo?>(null) }
     var section by remember { mutableStateOf("apps") }
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { vm.refreshServices() }
+
+    if (panel.open) {
+        AppPanelScreen(panel = panel, modifier = modifier, onClose = vm::closeAppPanel)
+        return
+    }
+
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Column { Text("服务中心", style = MaterialTheme.typography.headlineSmall); Text("应用服务 · 系统服务 · 进程", style = MaterialTheme.typography.bodySmall) }
+            Column { Text("应用控制中心", style = MaterialTheme.typography.headlineSmall); Text("管理面板 · 系统服务 · 进程", style = MaterialTheme.typography.bodySmall) }
             TextButton(onClick = vm::refreshServices) { Text("刷新") }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -41,14 +48,38 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 vm,
                 onLogs = {
                     logService = it
-                    vm.loadServiceLogs(it.initService)
-                }
+                    if (it.initService.isNotBlank()) vm.loadServiceLogs(it.initService)
+                },
+                onPanel = vm::openAppPanel
             )
             "processes" -> ProcessList(processes.filter { it.name.contains(query, true) || it.command.contains(query, true) })
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(services.filter { it.name.contains(query, true) }, key = { it.name }) { s -> ServiceCard(s, vm) }
             }
         }
+    }
+
+    if (panel.opening) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("正在打开管理面板") },
+            text = {
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 3.dp)
+                    Text("正在通过 SSH 建立安全隧道…")
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    if (panel.error.isNotBlank()) {
+        AlertDialog(
+            onDismissRequest = vm::closeAppPanel,
+            title = { Text("面板打开失败") },
+            text = { Text(panel.error) },
+            confirmButton = { TextButton(onClick = vm::closeAppPanel) { Text("确定") } }
+        )
     }
 
     logService?.let { service ->
@@ -85,13 +116,14 @@ private fun ServiceCard(s: ServiceInfo, vm: MainViewModel) {
 private fun AppServiceList(
     items: List<AppServiceInfo>,
     vm: MainViewModel,
-    onLogs: (AppServiceInfo) -> Unit
+    onLogs: (AppServiceInfo) -> Unit,
+    onPanel: (AppServiceInfo) -> Unit
 ) {
     if (items.isEmpty()) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
-                Text("未识别到应用服务", style = MaterialTheme.typography.titleMedium)
-                Text("当前识别常见代理、组网、DNS、容器、文件共享与 DDNS 服务。", style = MaterialTheme.typography.bodySmall)
+                Text("未识别到应用或 LuCI 服务面板", style = MaterialTheme.typography.titleMedium)
+                Text("V0.2.0 只显示实际安装证据或真实 LuCI 菜单，避免仅凭进程误判应用。", style = MaterialTheme.typography.bodySmall)
             }
         }
         return
@@ -103,30 +135,48 @@ private fun AppServiceList(
                 Column(Modifier.padding(14.dp)) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(s.displayName, style = MaterialTheme.typography.titleMedium)
-                        Text(if (s.running) "正常" else "已停止")
+                        Text(
+                            when {
+                                !s.controllable && s.panelAvailable -> "面板"
+                                s.running -> "正常"
+                                else -> "已停止"
+                            }
+                        )
                     }
                     Text(s.detail, style = MaterialTheme.typography.bodySmall)
                     val meta = buildList {
                         s.pid?.let { add("PID " + it) }
                         s.memoryKb?.let { add(formatKb(it)) }
                         if (s.enabled) add("开机自启")
+                        if (s.panelAvailable) add("可管理")
                     }
                     if (meta.isNotEmpty()) {
                         Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                     }
-                    if (!s.controllable) {
-                        Text("已识别运行状态，但未找到可控 init.d 服务", style = MaterialTheme.typography.bodySmall)
+                    if (!s.controllable && s.initService.isNotBlank()) {
+                        Text("已识别应用，但未找到可控 init.d 服务", style = MaterialTheme.typography.bodySmall)
                     }
                     Spacer(Modifier.height(8.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(
-                            onClick = { vm.appServiceAction(s, if (s.running) "restart" else "start") },
-                            enabled = s.controllable
-                        ) { Text(if (s.running) "重启" else "启动") }
-                        TextButton(
-                            onClick = { vm.appServiceAction(s, if (s.enabled) "disable" else "enable") },
-                            enabled = s.controllable
-                        ) { Text(if (s.enabled) "取消自启" else "设为自启") }
+
+                    if (s.panelAvailable) {
+                        Button(
+                            onClick = { onPanel(s) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) { Text("管理面板") }
+                        Spacer(Modifier.height(6.dp))
+                    }
+
+                    if (s.controllable) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { vm.appServiceAction(s, if (s.running) "restart" else "start") }
+                            ) { Text(if (s.running) "重启" else "启动") }
+                            TextButton(
+                                onClick = { vm.appServiceAction(s, if (s.enabled) "disable" else "enable") }
+                            ) { Text(if (s.enabled) "取消自启" else "设为自启") }
+                            TextButton(onClick = { onLogs(s) }) { Text("日志") }
+                        }
+                    } else if (s.initService.isNotBlank()) {
                         TextButton(onClick = { onLogs(s) }) { Text("日志") }
                     }
                 }
