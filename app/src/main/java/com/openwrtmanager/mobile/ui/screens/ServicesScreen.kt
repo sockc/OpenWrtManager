@@ -17,6 +17,8 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val services by vm.services.collectAsState()
     val appServices by vm.appServices.collectAsState()
     val processes by vm.processes.collectAsState()
+    val serviceLogs by vm.serviceLogs.collectAsState()
+    var logService by remember { mutableStateOf<AppServiceInfo?>(null) }
     var section by remember { mutableStateOf("apps") }
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { vm.refreshServices() }
@@ -34,12 +36,28 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         OutlinedTextField(query, { query = it }, label = { Text("搜索") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         when (section) {
-            "apps" -> AppServiceList(appServices.filter { it.displayName.contains(query, true) || it.id.contains(query, true) }, vm)
+            "apps" -> AppServiceList(
+                appServices.filter { it.displayName.contains(query, true) || it.id.contains(query, true) },
+                vm,
+                onLogs = {
+                    logService = it
+                    vm.loadServiceLogs(it.initService)
+                }
+            )
             "processes" -> ProcessList(processes.filter { it.name.contains(query, true) || it.command.contains(query, true) })
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(services.filter { it.name.contains(query, true) }, key = { it.name }) { s -> ServiceCard(s, vm) }
             }
         }
+    }
+
+    logService?.let { service ->
+        AlertDialog(
+            onDismissRequest = { logService = null },
+            title = { Text(service.displayName + " 日志") },
+            text = { Text(serviceLogs.ifBlank { "暂无相关日志" }, style = MaterialTheme.typography.bodySmall) },
+            confirmButton = { TextButton(onClick = { logService = null }) { Text("关闭") } }
+        )
     }
 }
 
