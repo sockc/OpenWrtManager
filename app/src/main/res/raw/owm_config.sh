@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Config Helper V0.1.9
+# OpenWrt Manager Config Helper V0.2.0
 set -u
 
-VERSION="0.1.9"
+VERSION="0.2.0"
 BASE="/etc/openwrt-manager"
 SAFE="$BASE/safe-apply"
 ALIASES="$BASE/device_aliases.tsv"
