@@ -45,6 +45,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _services = MutableStateFlow<List<ServiceInfo>>(emptyList())
     val services: StateFlow<List<ServiceInfo>> = _services.asStateFlow()
+    private val _appServices = MutableStateFlow<List<AppServiceInfo>>(emptyList())
+    val appServices: StateFlow<List<AppServiceInfo>> = _appServices.asStateFlow()
+    private val _processes = MutableStateFlow<List<ProcessInfo>>(emptyList())
+    val processes: StateFlow<List<ProcessInfo>> = _processes.asStateFlow()
+    private val _serviceLogs = MutableStateFlow("")
+    val serviceLogs: StateFlow<String> = _serviceLogs.asStateFlow()
     private val _logs = MutableStateFlow("")
     val logs: StateFlow<String> = _logs.asStateFlow()
     private val _terminalOutput = MutableStateFlow("")
@@ -124,7 +130,21 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun refreshServices() = viewModelScope.launch { task { _services.value = agent.services() } }
+    fun refreshServices() = viewModelScope.launch {
+        task {
+            _appServices.value = agent.appServices()
+            _services.value = agent.services()
+            _processes.value = agent.processes()
+        }
+    }
+
+    fun refreshAppServices() = viewModelScope.launch { task { _appServices.value = agent.appServices() } }
+    fun refreshProcesses() = viewModelScope.launch { task { _processes.value = agent.processes() } }
+
+    fun loadServiceLogs(name: String) = viewModelScope.launch {
+        _serviceLogs.value = ""
+        task { _serviceLogs.value = sanitize(agent.serviceLogs(name)) }
+    }
     fun refreshLogs() = viewModelScope.launch { task { _logs.value = sanitize(agent.logs()) } }
 
     fun checkUpdates() = viewModelScope.launch {
@@ -293,6 +313,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun serviceAction(service: ServiceInfo, action: String) = viewModelScope.launch {
         task {
             agent.serviceAction(service.name, action)
+            _services.value = agent.services()
+            _appServices.value = agent.appServices()
+        }
+    }
+
+    fun appServiceAction(service: AppServiceInfo, action: String) = viewModelScope.launch {
+        task {
+            agent.serviceAction(service.initService, action)
+            _appServices.value = agent.appServices()
             _services.value = agent.services()
         }
     }
