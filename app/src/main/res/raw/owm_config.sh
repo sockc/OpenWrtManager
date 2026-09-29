@@ -163,6 +163,15 @@ cmd_device_static_ip() {
 
     valid_ipv4 "$ip" || { echo '{"ok":false,"error":"invalid static ip"}'; exit 3; }
 
+    lan_ip="$(uci_get network.lan.ipaddr)"
+    [ "$ip" = "$lan_ip" ] && { echo '{"ok":false,"error":"static ip conflicts with router"}'; exit 4; }
+
+    lease_mac="$(awk -v i="$ip" '$3==i{print $2; exit}' /tmp/dhcp.leases 2>/dev/null)"
+    if [ -n "$lease_mac" ] && [ "$(printf '%s' "$lease_mac" | tr a-f A-F)" != "$mac" ]; then
+        echo '{"ok":false,"error":"static ip is currently leased to another device"}'
+        exit 5
+    fi
+
     other="$(find_dhcp_host_by_ip "$ip" 2>/dev/null || true)"
     if [ -n "$other" ]; then
         other_macs="$(uci -q get "dhcp.$other.mac" 2>/dev/null)"
@@ -170,7 +179,7 @@ cmd_device_static_ip() {
         for m in $other_macs; do
             [ "$(printf '%s' "$m" | tr a-f A-F)" = "$mac" ] && same=true
         done
-        [ "$same" = "true" ] || { echo '{"ok":false,"error":"static ip already assigned"}'; exit 4; }
+        [ "$same" = "true" ] || { echo '{"ok":false,"error":"static ip already assigned"}'; exit 6; }
     fi
 
     if [ -z "$sec" ]; then
