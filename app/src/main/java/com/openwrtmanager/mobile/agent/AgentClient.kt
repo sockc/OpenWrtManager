@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.6" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.7" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
