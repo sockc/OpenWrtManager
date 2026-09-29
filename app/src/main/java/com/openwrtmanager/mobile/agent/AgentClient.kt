@@ -274,6 +274,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         id = o.optString("id"),
                         displayName = o.optString("display_name"),
                         initService = o.optString("init_service"),
+                        controllable = o.optBoolean("controllable", true),
                         running = o.optBoolean("running"),
                         enabled = o.optBoolean("enabled"),
                         health = o.optString("health", "unknown"),
