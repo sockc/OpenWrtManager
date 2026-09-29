@@ -197,8 +197,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val rated = current.copy(wanRxBps = rxBps, wanTxBps = txBps)
         previousTraffic = current
         _traffic.value = rated
-        _wanRxHistory.value = (_wanRxHistory.value + rxBps).takeLast(20)
-        _wanTxHistory.value = (_wanTxHistory.value + txBps).takeLast(20)
+        _wanRxHistory.value = (_wanRxHistory.value + rxBps).takeLast(300)
+        _wanTxHistory.value = (_wanTxHistory.value + txBps).takeLast(300)
     }
 
     fun runDiagnostics() = viewModelScope.launch {
