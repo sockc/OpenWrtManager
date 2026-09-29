@@ -69,7 +69,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.9：设备命名 / DHCP 固定 IP / nft-qos 单设备限速 / 定时断网",
+                "V0.2.0：应用控制中心 / LuCI 管理面板 / SSH 隧道 WebView / 应用识别去重",
                 style = MaterialTheme.typography.bodySmall
             )
         }
