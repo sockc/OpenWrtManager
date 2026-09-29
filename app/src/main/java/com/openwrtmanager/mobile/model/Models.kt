@@ -132,3 +132,44 @@ data class ReleaseInfo(
     val apkUrl: String,
     val htmlUrl: String
 )
+
+
+data class FirewallZone(
+    val name: String,
+    val input: String = "",
+    val output: String = "",
+    val forward: String = "",
+    val masquerading: Boolean = false,
+    val mtuFix: Boolean = false,
+    val networks: List<String> = emptyList()
+)
+
+data class PortForwardRule(
+    val index: Int,
+    val name: String,
+    val enabled: Boolean,
+    val src: String = "wan",
+    val srcPort: String = "",
+    val dest: String = "lan",
+    val destIp: String = "",
+    val destPort: String = "",
+    val proto: String = "tcp"
+)
+
+data class TrafficRule(
+    val index: Int,
+    val name: String,
+    val enabled: Boolean,
+    val src: String = "",
+    val dest: String = "",
+    val proto: String = "",
+    val srcPort: String = "",
+    val destPort: String = "",
+    val target: String = ""
+)
+
+data class FirewallSnapshot(
+    val zones: List<FirewallZone> = emptyList(),
+    val redirects: List<PortForwardRule> = emptyList(),
+    val rules: List<TrafficRule> = emptyList()
+)
