@@ -102,6 +102,7 @@ data class AppServiceInfo(
     val id: String,
     val displayName: String,
     val initService: String,
+    val controllable: Boolean = true,
     val running: Boolean,
     val enabled: Boolean,
     val health: String = "unknown",
