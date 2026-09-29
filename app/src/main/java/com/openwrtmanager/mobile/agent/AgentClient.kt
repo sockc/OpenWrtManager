@@ -678,7 +678,10 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         panelPath = o.optString("panel_path"),
                         panelPort = o.optInt("panel_port"),
                         panelScheme = o.optString("panel_scheme", "http"),
-                        panelKind = o.optString("panel_kind")
+                        panelKind = o.optString("panel_kind"),
+                        panelHost = o.optString("panel_host", "127.0.0.1"),
+                        packageName = o.optString("package_name"),
+                        uptimeSeconds = if (o.isNull("uptime_seconds")) null else o.optLong("uptime_seconds")
                     )
                 )
             }
