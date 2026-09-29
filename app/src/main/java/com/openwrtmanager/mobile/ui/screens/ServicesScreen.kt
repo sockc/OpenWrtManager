@@ -15,6 +15,9 @@ import com.openwrtmanager.mobile.ui.MainViewModel
 @Composable
 fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val services by vm.services.collectAsState()
+    val appServices by vm.appServices.collectAsState()
+    val processes by vm.processes.collectAsState()
+    var section by remember { mutableStateOf("apps") }
     var query by remember { mutableStateOf("") }
     LaunchedEffect(Unit) { vm.refreshServices() }
     Column(modifier.fillMaxSize().padding(16.dp)) {
