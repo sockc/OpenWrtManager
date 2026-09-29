@@ -17,7 +17,7 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     LaunchedEffect(Unit) { vm.refreshServices() }
     Column(modifier.fillMaxSize().padding(16.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("服务中心", style = MaterialTheme.typography.headlineSmall)
+            Column { Text("服务中心", style = MaterialTheme.typography.headlineSmall); Text("应用服务 · 系统服务 · 进程", style = MaterialTheme.typography.bodySmall) }
             TextButton(onClick = vm::refreshServices) { Text("刷新") }
         }
         OutlinedTextField(query, { query = it }, label = { Text("搜索服务") }, modifier = Modifier.fillMaxWidth())
