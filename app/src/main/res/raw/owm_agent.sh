@@ -548,6 +548,19 @@ luci_title_for_slug() {
         adguardhome) printf '%s' "AdGuard Home"; return ;;
         smartdns) printf '%s' "SmartDNS"; return ;;
     esac
+
+    if command -v jsonfilter >/dev/null 2>&1; then
+        for file in /usr/share/luci/menu.d/*.json; do
+            [ -f "$file" ] || continue
+            grep -q ""admin/services/$slug"" "$file" 2>/dev/null || continue
+            title="$(jsonfilter -i "$file" -e "@[\"admin/services/$slug\"].title" 2>/dev/null | head -n1)"
+            if [ -n "$title" ]; then
+                printf '%s' "$title"
+                return
+            fi
+        done
+    fi
+
     printf '%s' "$slug"
 }
 
