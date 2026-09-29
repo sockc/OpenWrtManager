@@ -28,6 +28,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         "firewall" -> FirewallScreen(vm, modifier) { page = "menu" }
         "packages" -> PackageManagerScreen(vm, modifier) { page = "menu" }
         "backup" -> BackupRestoreScreen(vm, modifier) { page = "menu" }
+        "diagnostics" -> DiagnosticsScreen(vm, modifier) { page = "menu" }
         else -> Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
             Text("更多", style = MaterialTheme.typography.headlineSmall)
             Spacer(Modifier.height(12.dp))
@@ -56,6 +57,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                 }
             }
 
+            MoreButton("网络诊断", "WAN、默认路由、网关、DNS、接口错误与脱敏诊断报告") { page = "diagnostics" }
             MoreButton("防火墙与端口转发", "端口转发、流量规则、区域状态，支持 Safe Apply") { page = "firewall" }
             MoreButton("软件包管理", "OPKG：已安装、搜索、安装、单包升级和安全卸载") { page = "packages" }
             MoreButton("备份与恢复", "生成标准配置备份到手机，也可选择备份恢复") { page = "backup" }
@@ -67,7 +69,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.1.6：OPKG 软件包管理 / 单包升级保护 / 配置备份到手机 / sysupgrade 恢复",
+                "V0.1.7：实时 WAN / 1、5、15 分钟均值 / 网络诊断 / 健康检查 / 在线设备判定优化",
                 style = MaterialTheme.typography.bodySmall
             )
         }
