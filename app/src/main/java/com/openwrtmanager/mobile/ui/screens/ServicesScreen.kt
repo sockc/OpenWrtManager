@@ -97,3 +97,37 @@ private fun AppServiceList(items: List<AppServiceInfo>) {
         }
     }
 }
+
+
+@Composable
+private fun ProcessList(items: List<ProcessInfo>) {
+    LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(items.sortedByDescending { it.rssKb }, key = { it.pid }) { p ->
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(p.name, style = MaterialTheme.typography.titleMedium)
+                        Text("PID " + p.pid, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        "内存 " + formatKb(p.rssKb) + " · " + "%.2f".format(p.memoryPercent) + "%",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    if (p.user.isNotBlank()) {
+                        Text("用户：" + p.user, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(
+                        if (p.protected) "系统关键进程 · 仅查看" else "当前版本仅查看",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatKb(kb: Long): String = when {
+    kb >= 1024 * 1024 -> "%.1f GB".format(kb / 1024.0 / 1024.0)
+    kb >= 1024 -> "%.1f MB".format(kb / 1024.0)
+    else -> kb.toString() + " KB"
+}
