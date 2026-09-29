@@ -34,7 +34,7 @@ fun ServicesScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         OutlinedTextField(query, { query = it }, label = { Text("搜索") }, modifier = Modifier.fillMaxWidth())
         Spacer(Modifier.height(8.dp))
         when (section) {
-            "apps" -> AppServiceList(appServices.filter { it.displayName.contains(query, true) || it.id.contains(query, true) })
+            "apps" -> AppServiceList(appServices.filter { it.displayName.contains(query, true) || it.id.contains(query, true) }, vm)
             "processes" -> ProcessList(processes.filter { it.name.contains(query, true) || it.command.contains(query, true) })
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 items(services.filter { it.name.contains(query, true) }, key = { it.name }) { s -> ServiceCard(s, vm) }
@@ -64,7 +64,7 @@ private fun ServiceCard(s: ServiceInfo, vm: MainViewModel) {
 
 
 @Composable
-private fun AppServiceList(items: List<AppServiceInfo>) {
+private fun AppServiceList(items: List<AppServiceInfo>, vm: MainViewModel) {
     if (items.isEmpty()) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -91,6 +91,15 @@ private fun AppServiceList(items: List<AppServiceInfo>) {
                     }
                     if (meta.isNotEmpty()) {
                         Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = {
+                            vm.appServiceAction(s, if (s.running) "restart" else "start")
+                        }) { Text(if (s.running) "重启" else "启动") }
+                        TextButton(onClick = {
+                            vm.appServiceAction(s, if (s.enabled) "disable" else "enable")
+                        }) { Text(if (s.enabled) "取消自启" else "设为自启") }
                     }
                 }
             }
