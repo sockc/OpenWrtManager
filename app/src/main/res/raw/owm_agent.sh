@@ -105,8 +105,10 @@ state_rank() {
 }
 
 cmd_devices() {
-    tmp="/tmp/owm-neigh.$$"
+    tmp="/tmp/owm-neigh.$"
+    alltmp="/tmp/owm-neigh-all.$"
     ip -4 neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$tmp"
+    ip neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$alltmp"
     first=1
     seen=" "
     printf '['
@@ -154,9 +156,23 @@ cmd_devices() {
         printf ',"interface":'; q "$ifname"; printf ',"state":'; q "$state"; printf ',"type":'; q "$type"
         printf ',"band":'; q "$band"; printf ',"signal_dbm":'
         [ -n "$signal" ] && printf '%s' "$signal" || printf 'null'
-        printf ',"blocked":%s,"online":%s}' "$blocked" "$online"
+        printf ',"blocked":%s,"online":%s,"addresses":[' "$blocked" "$online"
+        addr_first=1
+        addr_seen=" "
+        while IFS= read -r other; do
+            echo "$other" | grep -qi "lladdr $mac " || continue
+            set -- $other
+            addr="${1:-}"
+            [ -n "$addr" ] || continue
+            case "$addr_seen" in *" $addr "*) continue ;; esac
+            addr_seen="$addr_seen$addr "
+            [ "$addr_first" = "1" ] || printf ','
+            addr_first=0
+            q "$addr"
+        done < "$alltmp"
+        printf ']}'
     done < "$tmp"
-    rm -f "$tmp"
+    rm -f "$tmp" "$alltmp"
     printf ']\n'
 }
 
@@ -201,6 +217,60 @@ cmd_network() {
     printf ',"lan_device":'; q "$lan_dev"; printf ',"lan_ipv4":'; q "$lan4"; printf ',"lan_ipv6":'; q "$lan6"; printf '}\n'
 }
 
+
+
+cmd_device_traffic_capability() {
+    installed=false
+    running=false
+    available=false
+    has_data=false
+    detail="未安装 nlbwmon"
+
+    if command -v nlbw >/dev/null 2>&1; then
+        installed=true
+        detail="已安装 nlbwmon"
+
+        if [ -x /etc/init.d/nlbwmon ] && /etc/init.d/nlbwmon status >/dev/null 2>&1; then
+            running=true
+        elif pgrep -x nlbwmon >/dev/null 2>&1; then
+            running=true
+        fi
+
+        out="$(nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$ || true)"
+        if printf '%s' "$out" | grep -q '"columns"'; then
+            available=true
+            first_mac="$(printf '%s' "$out" | jsonfilter -e '@.data[0][0]' 2>/dev/null | head -n1)"
+            if [ -n "$first_mac" ]; then
+                has_data=true
+                detail="nlbwmon 统计可用"
+            else
+                detail="nlbwmon 已运行，暂时没有流量数据"
+            fi
+        else
+            detail="nlbwmon 查询失败"
+        fi
+        rm -f /tmp/owm-nlbw-error.$
+    fi
+
+    printf '{"installed":%s,"running":%s,"available":%s,"has_data":%s,"backend":"nlbwmon","detail":' \
+        "$installed" "$running" "$available" "$has_data"
+    q "$detail"
+    printf '}\n'
+}
+
+cmd_device_traffic() {
+    if ! command -v nlbw >/dev/null 2>&1; then
+        echo '{"columns":["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"],"data":[]}'
+        return
+    fi
+
+    if ! nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$; then
+        rm -f /tmp/owm-nlbw-error.$
+        echo '{"columns":["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"],"data":[]}'
+        return
+    fi
+    rm -f /tmp/owm-nlbw-error.$
+}
 
 cmd_traffic() {
     wan="$(ubus call network.interface.wan status 2>/dev/null || echo '{}')"
@@ -710,6 +780,8 @@ case "${1:-}" in
     devices) cmd_devices ;;
     network) cmd_network ;;
     traffic) cmd_traffic ;;
+    device-traffic-capability) cmd_device_traffic_capability ;;
+    device-traffic) cmd_device_traffic ;;
     diagnostics) cmd_diagnostics ;;
     wifi) cmd_wifi ;;
     services) cmd_services ;;
