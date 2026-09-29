@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.1.7" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.1.8" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -64,7 +64,20 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         blocked = o.optBoolean("blocked", false),
                         online = o.optBoolean("online", false),
                         band = o.optString("band"),
-                        signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm")
+                        signalDbm = if (o.isNull("signal_dbm")) null else o.optInt("signal_dbm"),
+                        addresses = buildList {
+                            val a2 = o.optJSONArray("addresses")
+                            if (a2 != null) {
+                                for (j in 0 until a2.length()) {
+                                    val value = a2.optString(j).trim()
+                                    if (value.isNotBlank()) add(value)
+                                }
+                            }
+                            if (isEmpty()) {
+                                val primary = o.optString("ip").trim()
+                                if (primary.isNotBlank()) add(primary)
+                            }
+                        }.distinct()
                     )
                 )
             }
@@ -88,6 +101,51 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                     .thenBy { it.hostname.lowercase() }
                     .thenBy { it.ip }
             )
+    }
+
+
+    suspend fun deviceTrafficCapability(): DeviceTrafficCapability {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent device-traffic-capability", 20_000))
+        return DeviceTrafficCapability(
+            installed = o.optBoolean("installed"),
+            running = o.optBoolean("running"),
+            available = o.optBoolean("available"),
+            hasData = o.optBoolean("has_data"),
+            backend = o.optString("backend"),
+            detail = o.optString("detail")
+        )
+    }
+
+    suspend fun deviceTraffic(): List<DeviceTraffic> {
+        val o = JSONObject(ssh.exec("/usr/bin/owm-agent device-traffic", 25_000))
+        val columns = o.optJSONArray("columns") ?: JSONArray()
+        val data = o.optJSONArray("data") ?: JSONArray()
+
+        val index = mutableMapOf<String, Int>()
+        for (i in 0 until columns.length()) {
+            index[columns.optString(i)] = i
+        }
+
+        val macIndex = index["mac"] ?: return emptyList()
+        val connsIndex = index["conns"]
+        val rxIndex = index["rx_bytes"]
+        val txIndex = index["tx_bytes"]
+
+        return buildList {
+            for (i in 0 until data.length()) {
+                val row = data.optJSONArray(i) ?: continue
+                val mac = row.optString(macIndex).trim().uppercase()
+                if (mac.isBlank() || mac == "00:00:00:00:00:00") continue
+                add(
+                    DeviceTraffic(
+                        mac = mac,
+                        connections = connsIndex?.let { row.optLong(it) } ?: 0,
+                        rxBytes = rxIndex?.let { row.optLong(it) } ?: 0,
+                        txBytes = txIndex?.let { row.optLong(it) } ?: 0
+                    )
+                )
+            }
+        }
     }
 
     suspend fun network(): NetworkSummary {

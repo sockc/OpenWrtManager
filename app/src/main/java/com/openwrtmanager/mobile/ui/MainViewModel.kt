@@ -35,6 +35,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val status: StateFlow<SystemStatus?> = _status.asStateFlow()
     private val _devices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val devices: StateFlow<List<DeviceInfo>> = _devices.asStateFlow()
+    private val _deviceTrafficCapability = MutableStateFlow(DeviceTrafficCapability())
+    val deviceTrafficCapability: StateFlow<DeviceTrafficCapability> = _deviceTrafficCapability.asStateFlow()
+    private val _deviceTraffic = MutableStateFlow<List<DeviceTraffic>>(emptyList())
+    val deviceTraffic: StateFlow<List<DeviceTraffic>> = _deviceTraffic.asStateFlow()
+    private val _deviceTrafficMessage = MutableStateFlow("")
+    val deviceTrafficMessage: StateFlow<String> = _deviceTrafficMessage.asStateFlow()
+    private var deviceTrafficJob: Job? = null
+    private var previousDeviceTraffic: Map<String, DeviceTraffic> = emptyMap()
+    private var previousDeviceTrafficAtMs: Long = 0
     private val _network = MutableStateFlow<NetworkSummary?>(null)
     val network: StateFlow<NetworkSummary?> = _network.asStateFlow()
     private val _wifi = MutableStateFlow<List<WifiNetwork>>(emptyList())
@@ -122,6 +131,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _network.value = null
         _wifi.value = emptyList()
         _devices.value = emptyList()
+        _deviceTrafficCapability.value = DeviceTrafficCapability()
+        _deviceTraffic.value = emptyList()
+        _deviceTrafficMessage.value = ""
+        stopDeviceTrafficMonitoring()
+        previousDeviceTraffic = emptyMap()
+        previousDeviceTrafficAtMs = 0
         _networkConfig.value = null
         _safeApply.value = SafeApplyState()
         stopRealtimeMonitoring()
@@ -148,6 +163,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _network.value = agent.network()
             _wifi.value = agent.wifi()
             _devices.value = agent.devices()
+            runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
+            runCatching { updateDeviceTrafficSample() }
             runCatching { _appServices.value = agent.appServices() }
             runCatching { updateTrafficSample() }
             recomputeHealth()
@@ -165,6 +182,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { _status.value = agent.status() }
                     runCatching { _network.value = agent.network() }
                     recomputeHealth()
+                }
+                if (cycle % 5 == 0) {
+                    runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
+                    if (_deviceTrafficCapability.value.available) {
+                        runCatching { updateDeviceTrafficSample() }
+                    }
                 }
                 cycle++
                 delay(3000)
@@ -261,7 +284,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         return buildString {
             appendLine("OpenWrt Manager Diagnostic Report")
-            appendLine("App: 0.1.7")
+            appendLine("App: 0.1.8")
             appendLine()
             appendLine("[System]")
             appendLine("Model: ${s?.model.orEmpty()}")
@@ -295,6 +318,89 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             appendLine()
             appendLine("Sensitive fields such as passwords, tokens, MAC addresses, SSIDs and IP addresses are intentionally omitted.")
         }
+    }
+
+
+    fun refreshDeviceCenter() = viewModelScope.launch {
+        task {
+            _devices.value = agent.devices()
+            _deviceTrafficCapability.value = agent.deviceTrafficCapability()
+            if (_deviceTrafficCapability.value.available) {
+                updateDeviceTrafficSample()
+            } else {
+                _deviceTraffic.value = emptyList()
+                previousDeviceTraffic = emptyMap()
+                previousDeviceTrafficAtMs = 0
+            }
+        }
+    }
+
+    fun startDeviceTrafficMonitoring() {
+        if (deviceTrafficJob?.isActive == true) return
+        deviceTrafficJob = viewModelScope.launch {
+            var cycle = 0
+            while (_connected.value) {
+                if (cycle % 5 == 0) {
+                    runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
+                    runCatching { _devices.value = agent.devices() }
+                }
+                if (_deviceTrafficCapability.value.available) {
+                    runCatching { updateDeviceTrafficSample() }
+                }
+                cycle++
+                delay(3000)
+            }
+        }
+    }
+
+    fun stopDeviceTrafficMonitoring() {
+        deviceTrafficJob?.cancel()
+        deviceTrafficJob = null
+    }
+
+    private suspend fun updateDeviceTrafficSample() {
+        val now = System.currentTimeMillis()
+        val current = agent.deviceTraffic()
+        val previous = previousDeviceTraffic
+        val dt = if (previousDeviceTrafficAtMs > 0) now - previousDeviceTrafficAtMs else 0L
+
+        val rated = current.map { item ->
+            val old = previous[item.mac]
+            if (old != null && dt > 0) {
+                item.copy(
+                    rxBps = ((item.rxBytes - old.rxBytes).coerceAtLeast(0) * 1000L / dt),
+                    txBps = ((item.txBytes - old.txBytes).coerceAtLeast(0) * 1000L / dt)
+                )
+            } else {
+                item
+            }
+        }.sortedByDescending { it.totalBps }
+
+        previousDeviceTraffic = current.associateBy { it.mac }
+        previousDeviceTrafficAtMs = now
+        _deviceTraffic.value = rated
+    }
+
+    fun installDeviceTrafficBackend() = viewModelScope.launch {
+        task {
+            _deviceTrafficMessage.value = "正在安装 nlbwmon…"
+            runCatching { agent.updatePackageLists() }
+            agent.installPackage("nlbwmon")
+            runCatching { agent.serviceAction("nlbwmon", "enable") }
+            runCatching { agent.serviceAction("nlbwmon", "start") }
+            delay(1500)
+            _deviceTrafficCapability.value = agent.deviceTrafficCapability()
+            if (_deviceTrafficCapability.value.available) {
+                _deviceTrafficMessage.value = "nlbwmon 已安装，正在采集设备流量"
+                updateDeviceTrafficSample()
+            } else {
+                _deviceTrafficMessage.value = _deviceTrafficCapability.value.detail.ifBlank { "nlbwmon 已安装，但暂未可用" }
+            }
+        }
+    }
+
+    fun clearDeviceTrafficMessage() {
+        _deviceTrafficMessage.value = ""
     }
 
     fun refreshDevices() = viewModelScope.launch { task { _devices.value = agent.devices() } }
@@ -659,6 +765,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _devices.value = agent.devices()
         _network.value = agent.network()
         _wifi.value = agent.wifi()
+        runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
+        runCatching { updateDeviceTrafficSample() }
         runCatching { updateTrafficSample() }
         recomputeHealth()
     }
@@ -686,6 +794,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     override fun onCleared() {
+        stopRealtimeMonitoring()
+        stopDeviceTrafficMonitoring()
         ssh.disconnect()
         super.onCleared()
     }

@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.7
+# OpenWrt Manager Agent V0.1.8
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.7"
+VERSION="0.1.8"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
@@ -104,28 +104,61 @@ state_rank() {
     esac
 }
 
+
+neigh_ip() {
+    printf '%s\n' "$1" | awk '{print $1}'
+}
+
+neigh_dev() {
+    printf '%s\n' "$1" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+neigh_mac() {
+    printf '%s\n' "$1" | awk '{for(i=1;i<=NF;i++) if($i=="lladdr"){print $(i+1); exit}}'
+}
+
+neigh_state() {
+    printf '%s\n' "$1" | awk '{
+        for(i=1;i<=NF;i++) {
+            if($i ~ /^(REACHABLE|STALE|DELAY|PROBE|FAILED|NOARP|PERMANENT|INCOMPLETE)$/) {
+                print $i
+                exit
+            }
+        }
+    }'
+}
+
 cmd_devices() {
     tmp="/tmp/owm-neigh.$$"
-    ip -4 neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$tmp"
+    alltmp="/tmp/owm-neigh-all.$$"
+    ip neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$alltmp"
+    cp "$alltmp" "$tmp"
     first=1
     seen=" "
     printf '['
     while IFS= read -r line; do
-        set -- $line
-        ip="${1:-}"; ifname="${3:-}"; mac="${5:-}"; state="${6:-}"
+        ip="$(neigh_ip "$line")"
+        ifname="$(neigh_dev "$line")"
+        mac="$(neigh_mac "$line")"
+        state="$(neigh_state "$line")"
         valid_mac "$mac" || continue
         mac_upper="$(echo "$mac" | tr a-f A-F)"
         case "$seen" in *" $mac_upper "*) continue ;; esac
 
         best="$line"; best_rank="$(state_rank "$state")"
+        case "$ip" in *:*) ;; *) best_rank=$((best_rank + 5)) ;; esac
         while IFS= read -r other; do
             echo "$other" | grep -qi "lladdr $mac " || continue
-            set -- $other
-            r="$(state_rank "${6:-}")"
+            candidate_ip="$(neigh_ip "$other")"
+            candidate_state="$(neigh_state "$other")"
+            r="$(state_rank "$candidate_state")"
+            case "$candidate_ip" in *:*) ;; *) r=$((r + 5)) ;; esac
             if [ "$r" -gt "$best_rank" ]; then best="$other"; best_rank="$r"; fi
         done < "$tmp"
-        set -- $best
-        ip="${1:-}"; ifname="${3:-}"; mac="${5:-}"; state="${6:-}"
+        ip="$(neigh_ip "$best")"
+        ifname="$(neigh_dev "$best")"
+        mac="$(neigh_mac "$best")"
+        state="$(neigh_state "$best")"
         seen="$seen$mac_upper "
 
         hostname="$(awk -v m="$mac" 'tolower($2)==tolower(m){print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
@@ -154,9 +187,22 @@ cmd_devices() {
         printf ',"interface":'; q "$ifname"; printf ',"state":'; q "$state"; printf ',"type":'; q "$type"
         printf ',"band":'; q "$band"; printf ',"signal_dbm":'
         [ -n "$signal" ] && printf '%s' "$signal" || printf 'null'
-        printf ',"blocked":%s,"online":%s}' "$blocked" "$online"
+        printf ',"blocked":%s,"online":%s,"addresses":[' "$blocked" "$online"
+        addr_first=1
+        addr_seen=" "
+        while IFS= read -r other; do
+            echo "$other" | grep -qi "lladdr $mac " || continue
+            addr="$(neigh_ip "$other")"
+            [ -n "$addr" ] || continue
+            case "$addr_seen" in *" $addr "*) continue ;; esac
+            addr_seen="$addr_seen$addr "
+            [ "$addr_first" = "1" ] || printf ','
+            addr_first=0
+            q "$addr"
+        done < "$alltmp"
+        printf ']}'
     done < "$tmp"
-    rm -f "$tmp"
+    rm -f "$tmp" "$alltmp"
     printf ']\n'
 }
 
@@ -201,6 +247,60 @@ cmd_network() {
     printf ',"lan_device":'; q "$lan_dev"; printf ',"lan_ipv4":'; q "$lan4"; printf ',"lan_ipv6":'; q "$lan6"; printf '}\n'
 }
 
+
+
+cmd_device_traffic_capability() {
+    installed=false
+    running=false
+    available=false
+    has_data=false
+    detail="未安装 nlbwmon"
+
+    if command -v nlbw >/dev/null 2>&1; then
+        installed=true
+        detail="已安装 nlbwmon"
+
+        if [ -x /etc/init.d/nlbwmon ] && /etc/init.d/nlbwmon status >/dev/null 2>&1; then
+            running=true
+        elif pidof nlbwmon >/dev/null 2>&1; then
+            running=true
+        fi
+
+        out="$(nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$$ || true)"
+        if printf '%s' "$out" | grep -q '"columns"'; then
+            available=true
+            first_mac="$(printf '%s' "$out" | jsonfilter -e '@.data[0][0]' 2>/dev/null | head -n1)"
+            if [ -n "$first_mac" ]; then
+                has_data=true
+                detail="nlbwmon 统计可用"
+            else
+                detail="nlbwmon 已运行，暂时没有流量数据"
+            fi
+        else
+            detail="nlbwmon 查询失败"
+        fi
+        rm -f /tmp/owm-nlbw-error.$$
+    fi
+
+    printf '{"installed":%s,"running":%s,"available":%s,"has_data":%s,"backend":"nlbwmon","detail":' \
+        "$installed" "$running" "$available" "$has_data"
+    q "$detail"
+    printf '}\n'
+}
+
+cmd_device_traffic() {
+    if ! command -v nlbw >/dev/null 2>&1; then
+        echo '{"columns":["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"],"data":[]}'
+        return
+    fi
+
+    if ! nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$$; then
+        rm -f /tmp/owm-nlbw-error.$$
+        echo '{"columns":["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"],"data":[]}'
+        return
+    fi
+    rm -f /tmp/owm-nlbw-error.$$
+}
 
 cmd_traffic() {
     wan="$(ubus call network.interface.wan status 2>/dev/null || echo '{}')"
@@ -710,6 +810,8 @@ case "${1:-}" in
     devices) cmd_devices ;;
     network) cmd_network ;;
     traffic) cmd_traffic ;;
+    device-traffic-capability) cmd_device_traffic_capability ;;
+    device-traffic) cmd_device_traffic ;;
     diagnostics) cmd_diagnostics ;;
     wifi) cmd_wifi ;;
     services) cmd_services ;;

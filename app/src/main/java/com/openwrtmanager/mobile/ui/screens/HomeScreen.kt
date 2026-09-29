@@ -22,6 +22,8 @@ fun HomeScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
     val rxHistory by vm.wanRxHistory.collectAsState()
     val txHistory by vm.wanTxHistory.collectAsState()
     val health by vm.health.collectAsState()
+    val deviceTraffic by vm.deviceTraffic.collectAsState()
+    val deviceTrafficCapability by vm.deviceTrafficCapability.collectAsState()
 
     LaunchedEffect(Unit) { vm.refreshHome() }
     DisposableEffect(Unit) {
@@ -113,6 +115,26 @@ fun HomeScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
                     val radios = wifi.filter { it.kind == "radio" }
                     Text("${radios.count { !it.disabled }} / ${radios.size}", style = MaterialTheme.typography.displaySmall)
                     Text("无线电已启用", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
+
+        if (deviceTrafficCapability.available && deviceTraffic.isNotEmpty()) {
+            Spacer(Modifier.height(12.dp))
+            val top = deviceTraffic.maxByOrNull { it.totalBps }
+            val topDevice = devices.firstOrNull { it.mac == top?.mac }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("当前流量最高设备", style = MaterialTheme.typography.titleMedium)
+                    if (top != null) {
+                        Text(topDevice?.hostname ?: top.mac, style = MaterialTheme.typography.titleLarge)
+                        Text(
+                            "↓ ${formatRate(top.rxBps)}  ↑ ${formatRate(top.txBps)}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    } else {
+                        Text("暂无设备流量", style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }
