@@ -74,3 +74,12 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Editable Wi-Fi, LAN, DHCP, DNS, WAN and WAN6 settings
 - PPPoE passwords are never returned to the app
 - Separate `owm-config` helper for configuration writes
+
+
+## V0.1.4 Service Center
+
+- Service Center tabs: application services, system services, and processes.
+- Application-service discovery for Nikki, OpenClash, PassWall/PassWall2, HomeProxy, Mihomo, sing-box, Tailscale, ZeroTier, AdGuard Home, SmartDNS, MosDNS, Docker, Samba, and DDNS.
+- Application-service status, PID, memory use, autostart state, start/restart, autostart toggle, and per-service logs.
+- System-service protection is enforced both in the Android UI and router agent for critical networking services.
+- Process inventory is read-only in V0.1.4; critical processes are marked and no arbitrary process termination is exposed.
