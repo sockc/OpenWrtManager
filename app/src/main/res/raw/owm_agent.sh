@@ -1,8 +1,8 @@
 #!/bin/sh
-# OpenWrt Manager Agent V0.1.8
+# OpenWrt Manager Agent V0.1.9
 # Command agent used over SSH. It opens no listening socket.
 set -u
-VERSION="0.1.8"
+VERSION="0.1.9"
 BASE="/etc/openwrt-manager"
 BLOCKED="$BASE/blocked_macs"
 SELF="/usr/bin/owm-agent"
