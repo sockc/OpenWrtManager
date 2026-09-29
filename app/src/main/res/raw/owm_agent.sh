@@ -651,24 +651,40 @@ cmd_pkg_update() {
 cmd_pkg_install() {
     pkg="${1:-}"
     valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
-    opkg install "$pkg"
+    if opkg install "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
 }
 
 cmd_pkg_upgrade() {
     pkg="${1:-}"
     valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
-    opkg upgrade "$pkg"
+    pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
+    if opkg upgrade "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
 }
 
 cmd_pkg_remove() {
     pkg="${1:-}"
     valid_pkg "$pkg" || { echo '{"ok":false,"error":"invalid package"}'; exit 2; }
-    pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}'; exit 4; }
+    pkg_protected "$pkg" && { echo '{"ok":false,"error":"protected package"}' >&2; exit 4; }
     if opkg status "$pkg" 2>/dev/null | grep -qi '^Essential: yes'; then
-        echo '{"ok":false,"error":"essential package"}'
+        echo '{"ok":false,"error":"essential package"}' >&2
         exit 5
     fi
-    opkg remove "$pkg"
+    if opkg remove "$pkg" >/tmp/owm-opkg-action.log 2>&1; then
+        printf '{"ok":true,"package":'; q "$pkg"; printf '}\n'
+    else
+        tail -n 40 /tmp/owm-opkg-action.log >&2
+        exit 3
+    fi
 }
 
 cmd_block() {
