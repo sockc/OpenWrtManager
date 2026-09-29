@@ -82,6 +82,17 @@ class SshManager(private val secureStore: SecureStore) {
         channel.disconnect()
     }
 
+    suspend fun download(remotePath: String): ByteArray = withContext(Dispatchers.IO) {
+        val s = session?.takeIf { it.isConnected } ?: error("SSH 未连接")
+        val channel = s.openChannel("sftp") as ChannelSftp
+        channel.connect(5_000)
+        try {
+            channel.get(remotePath).use { it.readBytes() }
+        } finally {
+            channel.disconnect()
+        }
+    }
+
     fun isConnected(): Boolean = session?.isConnected == true
 
     fun disconnect() {
