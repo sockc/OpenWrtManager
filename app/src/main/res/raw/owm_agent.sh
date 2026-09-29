@@ -549,17 +549,26 @@ luci_title_for_slug() {
         smartdns) printf '%s' "SmartDNS"; return ;;
     esac
 
-    if command -v jsonfilter >/dev/null 2>&1; then
-        for file in /usr/share/luci/menu.d/*.json; do
-            [ -f "$file" ] || continue
-            grep -Fq "\"admin/services/$slug\"" "$file" 2>/dev/null || continue
-            title="$(jsonfilter -i "$file" -e "@[\\\"admin/services/$slug\\\"].title" 2>/dev/null | head -n1)"
-            if [ -n "$title" ]; then
-                printf '%s' "$title"
-                return
-            fi
-        done
-    fi
+    for file in /usr/share/luci/menu.d/*.json; do
+        [ -f "$file" ] || continue
+        grep -Fq "\"admin/services/$slug\"" "$file" 2>/dev/null || continue
+        title="$(awk -v key="\"admin/services/$slug\"" '
+            index($0,key) { found=1; seen=0 }
+            found { seen++ }
+            found && $0 ~ /"title"[[:space:]]*:/ {
+                line=$0
+                sub(/^.*"title"[[:space:]]*:[[:space:]]*"/, "", line)
+                sub(/".*$/, "", line)
+                print line
+                exit
+            }
+            found && seen > 20 { exit }
+        ' "$file" 2>/dev/null)"
+        if [ -n "$title" ]; then
+            printf '%s' "$title"
+            return
+        fi
+    done
 
     printf '%s' "$slug"
 }
@@ -630,7 +639,14 @@ service_pid() {
     svc="$1"
     [ -n "$svc" ] || return 1
     out="$(ubus call service list "{\"name\":\"$svc\"}" 2>/dev/null)"
-    pid="$(printf '%s\n' "$out" | sed -n 's/.*"pid":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' | head -n1)"
+    pid="$(printf '%s\n' "$out" | awk '
+        /"pid"[[:space:]]*:/ {
+            line=$0
+            sub(/^.*"pid"[[:space:]]*:[[:space:]]*/, "", line)
+            sub(/[^0-9].*$/, "", line)
+            if (line ~ /^[0-9]+$/) { print line; exit }
+        }
+    ')"
     [ -n "$pid" ] || return 1
     printf '%s' "$pid"
 }
