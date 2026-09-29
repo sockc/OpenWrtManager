@@ -235,7 +235,7 @@ cmd_device_traffic_capability() {
 
         if [ -x /etc/init.d/nlbwmon ] && /etc/init.d/nlbwmon status >/dev/null 2>&1; then
             running=true
-        elif pgrep -x nlbwmon >/dev/null 2>&1; then
+        elif pidof nlbwmon >/dev/null 2>&1; then
             running=true
         fi
 
