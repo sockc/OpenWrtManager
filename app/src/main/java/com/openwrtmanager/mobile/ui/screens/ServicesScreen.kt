@@ -82,7 +82,11 @@ private fun ServiceCard(s: ServiceInfo, vm: MainViewModel) {
 
 
 @Composable
-private fun AppServiceList(items: List<AppServiceInfo>, vm: MainViewModel) {
+private fun AppServiceList(
+    items: List<AppServiceInfo>,
+    vm: MainViewModel,
+    onLogs: (AppServiceInfo) -> Unit
+) {
     if (items.isEmpty()) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp)) {
@@ -118,6 +122,7 @@ private fun AppServiceList(items: List<AppServiceInfo>, vm: MainViewModel) {
                         TextButton(onClick = {
                             vm.appServiceAction(s, if (s.enabled) "disable" else "enable")
                         }) { Text(if (s.enabled) "取消自启" else "设为自启") }
+                        TextButton(onClick = { onLogs(s) }) { Text("日志") }
                     }
                 }
             }
