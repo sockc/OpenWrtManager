@@ -323,66 +323,12 @@ cmd_set_wan6() {
     echo '{"ok":true}'
 }
 
-
 valid_rule_index() {
     valid_num "$1" && [ "$1" -ge 0 ] && [ "$1" -le 999 ]
 }
 
 valid_port_spec() {
-    echo "$1" | grep -Eq '^[0-9]{1,5}(-[0-9]{1,5})?
-    kind="$1"
-    echo '{"ok":true,"applying":true}'
-
-    case "$kind" in
-        wifi)
-            (sleep 1; wifi reload >/dev/null 2>&1 || /etc/init.d/network reload >/dev/null 2>&1) >/dev/null 2>&1 &
-            ;;
-        dhcp)
-            (sleep 1; /etc/init.d/dnsmasq restart >/dev/null 2>&1) >/dev/null 2>&1 &
-            ;;
-        firewall)
-            (
-                sleep 1
-                if command -v fw4 >/dev/null 2>&1; then
-                    fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
-                else
-                    /etc/init.d/firewall restart >/dev/null 2>&1 || true
-                fi
-            ) >/dev/null 2>&1 &
-            ;;
-        *)
-            (
-                sleep 1
-                /etc/init.d/network restart >/dev/null 2>&1 || true
-                /etc/init.d/dnsmasq restart >/dev/null 2>&1 || true
-            ) >/dev/null 2>&1 &
-            ;;
-    esac
-}
-
-case "$1" in
-    install) cmd_install ;;
-    version) printf '{"version":"%s"}\n' "$VERSION" ;;
-    config) cmd_config ;;
-    safe-begin) cmd_safe_begin "$2" "$3" ;;
-    safe-status) cmd_safe_status ;;
-    safe-confirm) cmd_safe_confirm "$2" ;;
-    safe-rollback) cmd_safe_rollback "$2" ;;
-    set-wifi) cmd_set_wifi "$2" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10}" ;;
-    set-lan) cmd_set_lan "$2" "$3" ;;
-    set-dhcp) cmd_set_dhcp "$2" "$3" "$4" ;;
-    set-dns) cmd_set_dns "$2" "$3" ;;
-    set-wan) cmd_set_wan "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
-    set-wan6) cmd_set_wan6 "$2" ;;
-    firewall-list) cmd_firewall_list ;;
-    firewall-add-redirect) cmd_firewall_add_redirect "$2" "$3" "$4" "$5" "$6" "$7" ;;
-    firewall-set-redirect) cmd_firewall_set_redirect "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
-    firewall-delete-redirect) cmd_firewall_delete_redirect "$2" ;;
-    firewall-toggle-rule) cmd_firewall_toggle_rule "$2" "$3" ;;
-    apply) cmd_apply "$2" ;;
-    *) echo '{"error":"unknown command"}'; exit 2 ;;
-esac
- || return 1
+    echo "$1" | grep -Eq '^[0-9]{1,5}(-[0-9]{1,5})?$' || return 1
     first="${1%%-*}"
     last="${1##*-}"
     [ "$first" -ge 1 ] && [ "$first" -le 65535 ] && [ "$last" -ge 1 ] && [ "$last" -le 65535 ]
@@ -559,6 +505,16 @@ cmd_apply() {
         dhcp)
             (sleep 1; /etc/init.d/dnsmasq restart >/dev/null 2>&1) >/dev/null 2>&1 &
             ;;
+        firewall)
+            (
+                sleep 1
+                if command -v fw4 >/dev/null 2>&1; then
+                    fw4 reload >/dev/null 2>&1 || /etc/init.d/firewall restart >/dev/null 2>&1 || true
+                else
+                    /etc/init.d/firewall restart >/dev/null 2>&1 || true
+                fi
+            ) >/dev/null 2>&1 &
+            ;;
         *)
             (
                 sleep 1
@@ -583,6 +539,11 @@ case "$1" in
     set-dns) cmd_set_dns "$2" "$3" ;;
     set-wan) cmd_set_wan "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
     set-wan6) cmd_set_wan6 "$2" ;;
+    firewall-list) cmd_firewall_list ;;
+    firewall-add-redirect) cmd_firewall_add_redirect "$2" "$3" "$4" "$5" "$6" "$7" ;;
+    firewall-set-redirect) cmd_firewall_set_redirect "$2" "$3" "$4" "$5" "$6" "$7" "$8" ;;
+    firewall-delete-redirect) cmd_firewall_delete_redirect "$2" ;;
+    firewall-toggle-rule) cmd_firewall_toggle_rule "$2" "$3" ;;
     apply) cmd_apply "$2" ;;
     *) echo '{"error":"unknown command"}'; exit 2 ;;
 esac
