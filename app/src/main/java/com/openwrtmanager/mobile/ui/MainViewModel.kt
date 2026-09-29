@@ -41,6 +41,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val deviceTraffic: StateFlow<List<DeviceTraffic>> = _deviceTraffic.asStateFlow()
     private val _deviceTrafficMessage = MutableStateFlow("")
     val deviceTrafficMessage: StateFlow<String> = _deviceTrafficMessage.asStateFlow()
+    private val _devicePolicy = MutableStateFlow<DevicePolicy?>(null)
+    val devicePolicy: StateFlow<DevicePolicy?> = _devicePolicy.asStateFlow()
+    private val _qosCapability = MutableStateFlow(QosCapability())
+    val qosCapability: StateFlow<QosCapability> = _qosCapability.asStateFlow()
+    private val _devicePolicyMessage = MutableStateFlow("")
+    val devicePolicyMessage: StateFlow<String> = _devicePolicyMessage.asStateFlow()
     private var deviceTrafficJob: Job? = null
     private var previousDeviceTraffic: Map<String, DeviceTraffic> = emptyMap()
     private var previousDeviceTrafficAtMs: Long = 0
@@ -134,6 +140,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _deviceTrafficCapability.value = DeviceTrafficCapability()
         _deviceTraffic.value = emptyList()
         _deviceTrafficMessage.value = ""
+        _devicePolicy.value = null
+        _qosCapability.value = QosCapability()
+        _devicePolicyMessage.value = ""
         stopDeviceTrafficMonitoring()
         previousDeviceTraffic = emptyMap()
         previousDeviceTrafficAtMs = 0
@@ -284,7 +293,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         return buildString {
             appendLine("OpenWrt Manager Diagnostic Report")
-            appendLine("App: 0.1.8")
+            appendLine("App: 0.1.9")
             appendLine()
             appendLine("[System]")
             appendLine("Model: ${s?.model.orEmpty()}")
@@ -320,6 +329,88 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+
+
+    fun loadDevicePolicy(mac: String) = viewModelScope.launch {
+        task {
+            _devicePolicy.value = agent.devicePolicy(mac)
+            _qosCapability.value = agent.qosCapability()
+        }
+    }
+
+    fun clearDevicePolicy() {
+        _devicePolicy.value = null
+        _devicePolicyMessage.value = ""
+    }
+
+    fun clearDevicePolicyMessage() {
+        _devicePolicyMessage.value = ""
+    }
+
+    fun saveDeviceIdentity(device: DeviceInfo, alias: String, staticIp: String) = viewModelScope.launch {
+        task {
+            agent.setDeviceAlias(device.mac, alias.trim().take(40))
+            agent.setDeviceStaticIp(device.mac, staticIp.trim())
+            _devicePolicyMessage.value = "设备名称和固定 IP 已保存"
+            _devicePolicy.value = agent.devicePolicy(device.mac)
+            _devices.value = agent.devices()
+        }
+    }
+
+    fun saveDeviceQos(
+        device: DeviceInfo,
+        enabled: Boolean,
+        downloadKbps: Int,
+        uploadKbps: Int
+    ) = viewModelScope.launch {
+        task {
+            if (enabled) {
+                agent.setDeviceQos(
+                    device.mac,
+                    downloadKbps,
+                    uploadKbps,
+                    _devicePolicy.value?.alias?.ifBlank { device.hostname } ?: device.hostname
+                )
+                _devicePolicyMessage.value = "设备限速已启用"
+            } else {
+                agent.clearDeviceQos(device.mac)
+                _devicePolicyMessage.value = "设备限速已关闭"
+            }
+            _qosCapability.value = agent.qosCapability()
+            _devicePolicy.value = agent.devicePolicy(device.mac)
+        }
+    }
+
+    fun installQosBackend() = viewModelScope.launch {
+        task {
+            _devicePolicyMessage.value = "正在安装 nft-qos…"
+            runCatching { agent.updatePackageLists() }
+            agent.installPackage("nft-qos")
+            runCatching { agent.serviceAction("nft-qos", "enable") }
+            runCatching { agent.serviceAction("nft-qos", "start") }
+            delay(1200)
+            _qosCapability.value = agent.qosCapability()
+            _devicePolicyMessage.value =
+                if (_qosCapability.value.available) "nft-qos 已安装，可以设置单设备限速"
+                else _qosCapability.value.detail.ifBlank { "nft-qos 已安装，但当前不可用" }
+        }
+    }
+
+    fun saveDeviceSchedule(
+        device: DeviceInfo,
+        enabled: Boolean,
+        weekdays: List<Int>,
+        startTime: String,
+        endTime: String
+    ) = viewModelScope.launch {
+        task {
+            agent.setDeviceSchedule(device.mac, enabled, weekdays, startTime, endTime)
+            _devicePolicyMessage.value =
+                if (enabled) "定时断网已启用" else "定时断网已关闭"
+            _devicePolicy.value = agent.devicePolicy(device.mac)
+            _devices.value = agent.devices()
+        }
+    }
 
     fun refreshDeviceCenter() = viewModelScope.launch {
         task {
