@@ -183,6 +183,12 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
                     runCatching { _network.value = agent.network() }
                     recomputeHealth()
                 }
+                if (cycle % 5 == 0) {
+                    runCatching { _deviceTrafficCapability.value = agent.deviceTrafficCapability() }
+                    if (_deviceTrafficCapability.value.available) {
+                        runCatching { updateDeviceTrafficSample() }
+                    }
+                }
                 cycle++
                 delay(3000)
             }
