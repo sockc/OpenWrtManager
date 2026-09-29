@@ -118,7 +118,10 @@ data class AppServiceInfo(
     val panelPath: String = "",
     val panelPort: Int = 0,
     val panelScheme: String = "http",
-    val panelKind: String = ""
+    val panelKind: String = "",
+    val panelHost: String = "127.0.0.1",
+    val packageName: String = "",
+    val uptimeSeconds: Long? = null
 )
 
 data class ProcessInfo(
@@ -299,5 +302,9 @@ data class AppPanelState(
     val title: String = "",
     val url: String = "",
     val localPort: Int = 0,
+    val remoteHost: String = "127.0.0.1",
+    val remotePort: Int = 0,
+    val remoteScheme: String = "http",
+    val remotePath: String = "/",
     val error: String = ""
 )

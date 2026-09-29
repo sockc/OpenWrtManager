@@ -80,6 +80,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val packages: StateFlow<List<PackageInfo>> = _packages.asStateFlow()
     private val _packageMessage = MutableStateFlow("")
     val packageMessage: StateFlow<String> = _packageMessage.asStateFlow()
+    private val _packageManagerRequest = MutableStateFlow<String?>(null)
+    val packageManagerRequest: StateFlow<String?> = _packageManagerRequest.asStateFlow()
     private val _backupMessage = MutableStateFlow("")
     val backupMessage: StateFlow<String> = _backupMessage.asStateFlow()
 
@@ -300,7 +302,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         return buildString {
             appendLine("OpenWrt Manager Diagnostic Report")
-            appendLine("App: 0.2.0")
+            appendLine("App: 0.2.1")
             appendLine()
             appendLine("[System]")
             appendLine("Model: ${s?.model.orEmpty()}")
@@ -557,6 +559,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     }
 
 
+    fun openPackageManagerFor(packageName: String) {
+        val safe = packageName.trim()
+        if (safe.isNotBlank()) _packageManagerRequest.value = safe
+    }
+
+    fun consumePackageManagerRequest() {
+        _packageManagerRequest.value = null
+    }
+
     fun refreshPackageStatus() = viewModelScope.launch {
         task { _packageStatus.value = agent.packageStatus() }
     }
@@ -645,29 +656,73 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             return@launch
         }
 
+        establishAppPanel(
+            serviceId = service.id,
+            title = service.displayName,
+            remoteHost = service.panelHost.ifBlank { "127.0.0.1" },
+            remotePort = service.panelPort,
+            remoteScheme = service.panelScheme,
+            remotePath = service.panelPath
+        )
+    }
+
+    fun retryAppPanel() = viewModelScope.launch {
+        val current = _appPanel.value
+        if (current.remotePort !in 1..65535) return@launch
+        establishAppPanel(
+            serviceId = current.serviceId,
+            title = current.title,
+            remoteHost = current.remoteHost,
+            remotePort = current.remotePort,
+            remoteScheme = current.remoteScheme,
+            remotePath = current.remotePath
+        )
+    }
+
+    private suspend fun establishAppPanel(
+        serviceId: String,
+        title: String,
+        remoteHost: String,
+        remotePort: Int,
+        remoteScheme: String,
+        remotePath: String
+    ) {
         val oldPort = _appPanel.value.localPort
+        val scheme = if (remoteScheme.equals("https", true)) "https" else "http"
+        val path = if (remotePath.startsWith("/")) remotePath else "/$remotePath"
+
         _appPanel.value = AppPanelState(
             opening = true,
-            serviceId = service.id,
-            title = service.displayName
+            serviceId = serviceId,
+            title = title,
+            remoteHost = remoteHost,
+            remotePort = remotePort,
+            remoteScheme = scheme,
+            remotePath = path
         )
 
         try {
             if (oldPort > 0) runCatching { ssh.closeLocalForward(oldPort) }
-            val localPort = ssh.openLocalForward("127.0.0.1", service.panelPort)
-            val scheme = if (service.panelScheme.equals("https", true)) "https" else "http"
-            val path = if (service.panelPath.startsWith("/")) service.panelPath else "/" + service.panelPath
+            val localPort = ssh.openLocalForward(remoteHost, remotePort)
             _appPanel.value = AppPanelState(
                 open = true,
-                serviceId = service.id,
-                title = service.displayName,
+                serviceId = serviceId,
+                title = title,
                 url = "$scheme://127.0.0.1:$localPort$path",
-                localPort = localPort
+                localPort = localPort,
+                remoteHost = remoteHost,
+                remotePort = remotePort,
+                remoteScheme = scheme,
+                remotePath = path
             )
         } catch (t: Throwable) {
             _appPanel.value = AppPanelState(
-                serviceId = service.id,
-                title = service.displayName,
+                serviceId = serviceId,
+                title = title,
+                remoteHost = remoteHost,
+                remotePort = remotePort,
+                remoteScheme = scheme,
+                remotePath = path,
                 error = t.message ?: t.javaClass.simpleName
             )
         }
@@ -690,9 +745,9 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     fun refreshAppServices() = viewModelScope.launch { task { _appServices.value = agent.appServices() } }
     fun refreshProcesses() = viewModelScope.launch { task { _processes.value = agent.processes() } }
 
-    fun loadServiceLogs(name: String) = viewModelScope.launch {
+    fun loadServiceLogs(name: String, lines: Int = 100) = viewModelScope.launch {
         _serviceLogs.value = ""
-        task { _serviceLogs.value = sanitize(agent.serviceLogs(name)) }
+        task { _serviceLogs.value = sanitize(agent.serviceLogs(name, lines)) }
     }
     fun refreshLogs() = viewModelScope.launch { task { _logs.value = sanitize(agent.logs()) } }
 

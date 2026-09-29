@@ -15,8 +15,22 @@ import com.openwrtmanager.mobile.BuildConfig
 import com.openwrtmanager.mobile.ui.MainViewModel
 
 @Composable
-fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
+fun MoreScreen(
+    vm: MainViewModel,
+    modifier: Modifier = Modifier,
+    packageQuery: String? = null,
+    onPackageQueryConsumed: () -> Unit = {}
+) {
     var page by remember { mutableStateOf("menu") }
+    var pendingPackageQuery by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(packageQuery) {
+        if (!packageQuery.isNullOrBlank()) {
+            pendingPackageQuery = packageQuery
+            page = "packages"
+            onPackageQueryConsumed()
+        }
+    }
     val latest by vm.latestRelease.collectAsState()
     val updateAvailable by vm.updateAvailable.collectAsState()
     val updateChecking by vm.updateChecking.collectAsState()
@@ -26,7 +40,15 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
         "logs" -> LogsScreen(vm, modifier) { page = "menu" }
         "terminal" -> TerminalScreen(vm, modifier) { page = "menu" }
         "firewall" -> FirewallScreen(vm, modifier) { page = "menu" }
-        "packages" -> PackageManagerScreen(vm, modifier) { page = "menu" }
+        "packages" -> PackageManagerScreen(
+            vm = vm,
+            modifier = modifier,
+            initialQuery = pendingPackageQuery,
+            back = {
+                pendingPackageQuery = null
+                page = "menu"
+            }
+        )
         "backup" -> BackupRestoreScreen(vm, modifier) { page = "menu" }
         "diagnostics" -> DiagnosticsScreen(vm, modifier) { page = "menu" }
         else -> Column(modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
@@ -69,7 +91,7 @@ fun MoreScreen(vm: MainViewModel, modifier: Modifier = Modifier) {
 
             Spacer(Modifier.height(16.dp))
             Text(
-                "V0.2.0：应用控制中心 / LuCI 管理面板 / SSH 隧道 WebView / 应用识别去重",
+                "V0.2.1：独立 WebUI 自动发现 / 应用详情 / 面板重连 / 日志增强",
                 style = MaterialTheme.typography.bodySmall
             )
         }

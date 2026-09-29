@@ -9,7 +9,7 @@ import org.json.JSONObject
 import java.util.Base64
 
 class AgentClient(private val context: Context, private val ssh: SshManager) {
-    companion object { const val BUNDLED_AGENT_VERSION = "0.2.0" }
+    companion object { const val BUNDLED_AGENT_VERSION = "0.2.1" }
 
     suspend fun agentVersion(): String? = runCatching {
         val out = ssh.exec("/usr/bin/owm-agent version 2>/dev/null")
@@ -678,7 +678,10 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
                         panelPath = o.optString("panel_path"),
                         panelPort = o.optInt("panel_port"),
                         panelScheme = o.optString("panel_scheme", "http"),
-                        panelKind = o.optString("panel_kind")
+                        panelKind = o.optString("panel_kind"),
+                        panelHost = o.optString("panel_host", "127.0.0.1"),
+                        packageName = o.optString("package_name"),
+                        uptimeSeconds = if (o.isNull("uptime_seconds")) null else o.optLong("uptime_seconds")
                     )
                 )
             }
@@ -708,7 +711,7 @@ class AgentClient(private val context: Context, private val ssh: SshManager) {
 
     suspend fun serviceLogs(name: String, lines: Int = 120): String {
         val safe = name.replace(Regex("[^A-Za-z0-9_.@+-]"), "")
-        return ssh.exec("/usr/bin/owm-agent service-logs '$safe' ${lines.coerceIn(20, 300)}", 20_000)
+        return ssh.exec("/usr/bin/owm-agent service-logs '$safe' ${lines.coerceIn(20, 1000)}", 25_000)
     }
 
     suspend fun services(): List<ServiceInfo> {

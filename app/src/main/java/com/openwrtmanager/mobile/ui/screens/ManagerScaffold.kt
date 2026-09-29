@@ -14,11 +14,18 @@ private enum class Tab(val title: String) { HOME("首页"), DEVICES("设备"), N
 fun ManagerScaffold(vm: MainViewModel) {
     var tab by remember { mutableStateOf(Tab.HOME) }
     val agentInstalled by vm.agentInstalled.collectAsState()
+    val packageRequest by vm.packageManagerRequest.collectAsState()
+    val appPanel by vm.appPanel.collectAsState()
+
+    LaunchedEffect(packageRequest) {
+        if (!packageRequest.isNullOrBlank()) tab = Tab.MORE
+    }
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
-                Tab.entries.forEach { item ->
+            if (!appPanel.open && !appPanel.opening) {
+                NavigationBar {
+                    Tab.entries.forEach { item ->
                     val icon = when(item) {
                         Tab.HOME -> Icons.Default.Home
                         Tab.DEVICES -> Icons.Default.Devices
@@ -26,12 +33,13 @@ fun ManagerScaffold(vm: MainViewModel) {
                         Tab.SERVICES -> Icons.Default.Build
                         Tab.MORE -> Icons.Default.MoreHoriz
                     }
-                    NavigationBarItem(
-                        selected = tab == item,
-                        onClick = { tab = item },
-                        icon = { Icon(icon, null) },
-                        label = { Text(item.title) }
-                    )
+                        NavigationBarItem(
+                            selected = tab == item,
+                            onClick = { tab = item },
+                            icon = { Icon(icon, null) },
+                            label = { Text(item.title) }
+                        )
+                    }
                 }
             }
         }
@@ -44,7 +52,12 @@ fun ManagerScaffold(vm: MainViewModel) {
                 Tab.DEVICES -> DevicesScreen(vm, Modifier.padding(padding))
                 Tab.NETWORK -> NetworkScreen(vm, Modifier.padding(padding))
                 Tab.SERVICES -> ServicesScreen(vm, Modifier.padding(padding))
-                Tab.MORE -> MoreScreen(vm, Modifier.padding(padding))
+                Tab.MORE -> MoreScreen(
+                    vm = vm,
+                    modifier = Modifier.padding(padding),
+                    packageQuery = packageRequest,
+                    onPackageQueryConsumed = vm::consumePackageManagerRequest
+                )
             }
         }
     }

@@ -14,6 +14,7 @@ import com.openwrtmanager.mobile.ui.MainViewModel
 fun PackageManagerScreen(
     vm: MainViewModel,
     modifier: Modifier = Modifier,
+    initialQuery: String? = null,
     back: () -> Unit
 ) {
     val status by vm.packageStatus.collectAsState()
@@ -24,9 +25,15 @@ fun PackageManagerScreen(
     var query by remember { mutableStateOf("") }
     var pendingAction by remember { mutableStateOf<Pair<String, PackageInfo>?>(null) }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(initialQuery) {
         vm.refreshPackageStatus()
-        vm.loadInstalledPackages()
+        if (!initialQuery.isNullOrBlank()) {
+            tab = "search"
+            query = initialQuery
+            vm.searchPackages(initialQuery)
+        } else {
+            vm.loadInstalledPackages()
+        }
     }
 
     Column(modifier.fillMaxSize().padding(16.dp)) {
