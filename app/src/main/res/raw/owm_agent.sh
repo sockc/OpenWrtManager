@@ -241,8 +241,9 @@ cmd_services() {
         running=false
         if ubus call service list "{\"name\":\"$name\"}" 2>/dev/null | grep -q '"running"[[:space:]]*:[[:space:]]*true'; then running=true
         elif "$f" status >/dev/null 2>&1; then running=true; fi
+        case "$name" in network|firewall|dropbear|dnsmasq|odhcpd|ubus|rpcd|uhttpd) protected=true ;; *) protected=false ;; esac
         [ $first -eq 1 ] || printf ','; first=0
-        printf '{"name":'; q "$name"; printf ',"enabled":%s,"running":%s}' "$enabled" "$running"
+        printf '{"name":'; q "$name"; printf ',"enabled":%s,"running":%s,"protected":%s}' "$enabled" "$running" "$protected"
     done
     printf ']\n'
 }
