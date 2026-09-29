@@ -148,6 +148,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             _network.value = agent.network()
             _wifi.value = agent.wifi()
             _devices.value = agent.devices()
+            runCatching { _appServices.value = agent.appServices() }
             runCatching { updateTrafficSample() }
             recomputeHealth()
         }
@@ -235,6 +236,11 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
         if (_safeApply.value.active) {
             items += HealthItem("warn", "配置等待确认", "Safe Apply 尚未确认")
+        }
+
+        val stoppedEnabledServices = _appServices.value.count { it.enabled && !it.running }
+        if (stoppedEnabledServices > 0) {
+            items += HealthItem("warn", "应用服务异常", "$stoppedEnabledServices 个已启用服务当前未运行")
         }
 
         _diagnostics.value.checks.filter { it.status == "fail" }.forEach {
