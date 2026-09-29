@@ -33,7 +33,8 @@ data class DeviceInfo(
     val blocked: Boolean,
     val online: Boolean = false,
     val band: String = "",
-    val signalDbm: Int? = null
+    val signalDbm: Int? = null,
+    val addresses: List<String> = emptyList()
 )
 
 data class NetworkSummary(
@@ -237,3 +238,25 @@ data class HealthItem(
     val title: String,
     val detail: String = ""
 )
+
+
+data class DeviceTrafficCapability(
+    val installed: Boolean = false,
+    val running: Boolean = false,
+    val available: Boolean = false,
+    val hasData: Boolean = false,
+    val backend: String = "",
+    val detail: String = ""
+)
+
+data class DeviceTraffic(
+    val mac: String,
+    val connections: Long = 0,
+    val rxBytes: Long = 0,
+    val txBytes: Long = 0,
+    val rxBps: Long = 0,
+    val txBps: Long = 0
+) {
+    val totalBytes: Long get() = rxBytes + txBytes
+    val totalBps: Long get() = rxBps + txBps
+}
