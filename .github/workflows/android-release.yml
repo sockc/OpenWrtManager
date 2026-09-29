@@ -28,6 +28,13 @@ jobs:
         with:
           gradle-version: '8.9'
 
+      - name: Validate router shell scripts
+        shell: bash
+        run: |
+          set -euo pipefail
+          sh -n app/src/main/res/raw/owm_agent.sh
+          sh -n app/src/main/res/raw/owm_config.sh
+
       - name: Restore permanent signing key
         shell: bash
         env:
