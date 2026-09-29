@@ -114,3 +114,13 @@ V0.3：实时网速、按设备流量、限速、时间计划、VPN/Tailscale、
 - Interface diagnostics show RX/TX counters, errors, and dropped packets.
 - Health checks surface WAN failures, low memory, low storage, high temperature, and pending Safe Apply state.
 - Diagnostic reports intentionally omit passwords, tokens, SSIDs, MAC addresses, and IP addresses.
+
+
+## V0.1.8 Device Center 3.0
+
+- Device identity now keeps multiple observed IPv4/IPv6 addresses for the same MAC while retaining one primary address for compact lists.
+- The device page is upgraded to Device Center 3.0 with online/recent separation, details, Wi-Fi band/signal/interface data and current traffic ranking.
+- Per-device traffic uses nlbwmon when available. The app detects the backend, never invents traffic values, and offers an explicit nlbwmon install action when the package is missing.
+- Per-device realtime rates are calculated in the Android app from successive nlbwmon MAC-grouped counters. The router only returns accounting counters.
+- Cumulative traffic is labelled as the current nlbwmon accounting period rather than "today", because nlbwmon periods are configurable and are monthly by default.
+- The home dashboard can show the current highest-traffic device when nlbwmon data is available.
