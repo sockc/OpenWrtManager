@@ -105,10 +105,10 @@ state_rank() {
 }
 
 cmd_devices() {
-    tmp="/tmp/owm-neigh.$"
-    alltmp="/tmp/owm-neigh-all.$"
-    ip -4 neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$tmp"
+    tmp="/tmp/owm-neigh.$$"
+    alltmp="/tmp/owm-neigh-all.$$"
     ip neigh show 2>/dev/null | awk '$0 !~ /FAILED/ && /lladdr/ {print}' > "$alltmp"
+    cp "$alltmp" "$tmp"
     first=1
     seen=" "
     printf '['
@@ -120,10 +120,13 @@ cmd_devices() {
         case "$seen" in *" $mac_upper "*) continue ;; esac
 
         best="$line"; best_rank="$(state_rank "$state")"
+        case "$ip" in *:*) ;; *) best_rank=$((best_rank + 5)) ;; esac
         while IFS= read -r other; do
             echo "$other" | grep -qi "lladdr $mac " || continue
             set -- $other
+            candidate_ip="${1:-}"
             r="$(state_rank "${6:-}")"
+            case "$candidate_ip" in *:*) ;; *) r=$((r + 5)) ;; esac
             if [ "$r" -gt "$best_rank" ]; then best="$other"; best_rank="$r"; fi
         done < "$tmp"
         set -- $best
@@ -236,7 +239,7 @@ cmd_device_traffic_capability() {
             running=true
         fi
 
-        out="$(nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$ || true)"
+        out="$(nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$$ || true)"
         if printf '%s' "$out" | grep -q '"columns"'; then
             available=true
             first_mac="$(printf '%s' "$out" | jsonfilter -e '@.data[0][0]' 2>/dev/null | head -n1)"
@@ -249,7 +252,7 @@ cmd_device_traffic_capability() {
         else
             detail="nlbwmon 查询失败"
         fi
-        rm -f /tmp/owm-nlbw-error.$
+        rm -f /tmp/owm-nlbw-error.$$
     fi
 
     printf '{"installed":%s,"running":%s,"available":%s,"has_data":%s,"backend":"nlbwmon","detail":' \
@@ -264,12 +267,12 @@ cmd_device_traffic() {
         return
     fi
 
-    if ! nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$; then
-        rm -f /tmp/owm-nlbw-error.$
+    if ! nlbw -c json -g mac -o mac 2>/tmp/owm-nlbw-error.$$; then
+        rm -f /tmp/owm-nlbw-error.$$
         echo '{"columns":["mac","conns","rx_bytes","rx_pkts","tx_bytes","tx_pkts"],"data":[]}'
         return
     fi
-    rm -f /tmp/owm-nlbw-error.$
+    rm -f /tmp/owm-nlbw-error.$$
 }
 
 cmd_traffic() {
