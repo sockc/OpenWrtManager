@@ -537,13 +537,25 @@ cmd_backup_restore() {
         exit 4
     }
 
+    if grep -Eq '(^/|(^|/)\.\.(/|$))' /tmp/owm-restore-list.log; then
+        rm -f "$path"
+        echo '{"ok":false,"error":"unsafe backup paths"}'
+        exit 5
+    fi
+
+    grep -q '^etc/config/' /tmp/owm-restore-list.log || {
+        rm -f "$path"
+        echo '{"ok":false,"error":"not an OpenWrt config backup"}'
+        exit 6
+    }
+
     if sysupgrade -r "$path" >/tmp/owm-restore.log 2>&1; then
         rm -f "$path"
         echo '{"ok":true,"reboot_required":true}'
     else
         tail -n 30 /tmp/owm-restore.log >&2
         rm -f "$path"
-        exit 5
+        exit 7
     fi
 }
 
