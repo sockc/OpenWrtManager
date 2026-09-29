@@ -1006,7 +1006,7 @@ cmd_service_logs() {
     lines="${2:-120}"
     valid_name "$name" || exit 2
     case "$lines" in *[!0-9]*) lines=120;; esac
-    [ "$lines" -gt 300 ] && lines=300
+    [ "$lines" -gt 1000 ] && lines=1000
     logread 2>/dev/null | grep -i "$name" | tail -n "$lines"
 }
 
