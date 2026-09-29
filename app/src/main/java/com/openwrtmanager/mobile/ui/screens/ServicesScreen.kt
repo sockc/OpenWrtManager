@@ -114,14 +114,19 @@ private fun AppServiceList(
                     if (meta.isNotEmpty()) {
                         Text(meta.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                     }
+                    if (!s.controllable) {
+                        Text("已识别运行状态，但未找到可控 init.d 服务", style = MaterialTheme.typography.bodySmall)
+                    }
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            vm.appServiceAction(s, if (s.running) "restart" else "start")
-                        }) { Text(if (s.running) "重启" else "启动") }
-                        TextButton(onClick = {
-                            vm.appServiceAction(s, if (s.enabled) "disable" else "enable")
-                        }) { Text(if (s.enabled) "取消自启" else "设为自启") }
+                        OutlinedButton(
+                            onClick = { vm.appServiceAction(s, if (s.running) "restart" else "start") },
+                            enabled = s.controllable
+                        ) { Text(if (s.running) "重启" else "启动") }
+                        TextButton(
+                            onClick = { vm.appServiceAction(s, if (s.enabled) "disable" else "enable") },
+                            enabled = s.controllable
+                        ) { Text(if (s.enabled) "取消自启" else "设为自启") }
                         TextButton(onClick = { onLogs(s) }) { Text("日志") }
                     }
                 }
