@@ -312,9 +312,10 @@ cmd_app_services() {
         id="$1"; label="$2"; svc="$3"; pattern="$4"; detail="$5"
         [ -x "/etc/init.d/$svc" ] || command -v "$pattern" >/dev/null 2>&1 || first_pid_for "$pattern" >/dev/null 2>&1 || return 0
 
-        service_running "$svc" && running=true || running=false
-        service_enabled "$svc" && enabled=true || enabled=false
         pid="$(first_pid_for "$pattern" 2>/dev/null || true)"
+        if service_running "$svc" || [ -n "$pid" ]; then running=true; else running=false; fi
+        service_enabled "$svc" && enabled=true || enabled=false
+        [ -x "/etc/init.d/$svc" ] && controllable=true || controllable=false
         rss=""
         [ -n "$pid" ] && rss="$(pid_rss_kb "$pid")"
         [ "$running" = "true" ] && health="healthy" || health="stopped"
@@ -324,7 +325,7 @@ cmd_app_services() {
         printf '{"id":'; q "$id"
         printf ',"display_name":'; q "$label"
         printf ',"init_service":'; q "$svc"
-        printf ',"running":%s,"enabled":%s' "$running" "$enabled"
+        printf ',"controllable":%s,"running":%s,"enabled":%s' "$controllable" "$running" "$enabled"
         printf ',"health":'; q "$health"
         printf ',"version":""'
         printf ',"pid":'
@@ -338,13 +339,20 @@ cmd_app_services() {
     }
 
     emit_app_service "openclash" "OpenClash" "openclash" "clash" "代理服务"
+    emit_app_service "nikki" "Nikki" "nikki" "mihomo" "代理服务"
     emit_app_service "passwall" "PassWall" "passwall" "sing-box" "代理服务"
+    emit_app_service "passwall2" "PassWall2" "passwall2" "sing-box" "代理服务"
+    emit_app_service "homeproxy" "HomeProxy" "homeproxy" "sing-box" "代理服务"
     emit_app_service "mihomo" "Mihomo" "mihomo" "mihomo" "代理核心"
     emit_app_service "singbox" "sing-box" "sing-box" "sing-box" "代理核心"
     emit_app_service "tailscale" "Tailscale" "tailscale" "tailscaled" "组网服务"
+    emit_app_service "zerotier" "ZeroTier" "zerotier" "zerotier-one" "组网服务"
     emit_app_service "adguardhome" "AdGuard Home" "AdGuardHome" "AdGuardHome" "DNS / 广告过滤"
+    emit_app_service "smartdns" "SmartDNS" "smartdns" "smartdns" "DNS 服务"
+    emit_app_service "mosdns" "MosDNS" "mosdns" "mosdns" "DNS 服务"
     emit_app_service "docker" "Docker" "dockerd" "dockerd" "容器服务"
-    emit_app_service "samba" "Samba" "samba4" "smbd" "文件共享"
+    emit_app_service "samba4" "Samba" "samba4" "smbd" "文件共享"
+    emit_app_service "samba" "Samba" "samba" "smbd" "文件共享"
     emit_app_service "ddns" "DDNS" "ddns" "ddns" "动态域名"
 
     printf ']\n'
