@@ -897,18 +897,22 @@ cmd_app_services() {
         system_service_name "$svc" && return 0
         case "$seen_services" in *"|$svc|"*) return 0 ;; esac
 
+        has_luci=false
+        luci_slug_exists "$svc" && has_luci=true
+
         pid="$(service_pid "$svc" 2>/dev/null || true)"
         [ -n "$pid" ] || pid="$(first_pid_for_app "$svc" "$svc" "$svc" 2>/dev/null || true)"
-        [ -n "$pid" ] || return 0
+        [ -n "$pid" ] || [ "$has_luci" = "true" ] || return 0
 
-        ports="$(listen_ports_for_pid "$pid" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+        ports=""
+        [ -n "$pid" ] && ports="$(listen_ports_for_pid "$pid" | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
         panel_available=false
         panel_kind=""
         panel_path=""
         panel_scheme="http"
         panel_port=0
 
-        if luci_slug_exists "$svc"; then
+        if [ "$has_luci" = "true" ]; then
             panel_available=true
             panel_kind="luci"
             panel_path="/cgi-bin/luci/admin/services/$svc"
@@ -934,8 +938,12 @@ cmd_app_services() {
 
         service_enabled "$svc" && enabled=true || enabled=false
         service_running "$svc" && running=true || running=false
-        rss="$(pid_rss_kb "$pid")"
-        uptime="$(pid_uptime_seconds "$pid")"
+        rss=""
+        uptime=""
+        if [ -n "$pid" ]; then
+            rss="$(pid_rss_kb "$pid")"
+            uptime="$(pid_uptime_seconds "$pid")"
+        fi
         pkg="$(installed_package_for "$svc" "$svc" "")"
         version="$(package_version "$pkg")"
 
@@ -947,7 +955,9 @@ cmd_app_services() {
         printf ',"controllable":true,"running":%s,"enabled":%s' "$running" "$enabled"
         printf ',"health":"healthy","version":'; q "$version"
         printf ',"package_name":'; q "$pkg"
-        printf ',"pid":%s,"uptime_seconds":' "$pid"
+        printf ',"pid":'
+        [ -n "$pid" ] && printf '%s' "$pid" || printf 'null'
+        printf ',"uptime_seconds":'
         [ -n "$uptime" ] && printf '%s' "$uptime" || printf 'null'
         printf ',"cpu_percent":null,"memory_kb":'
         [ -n "$rss" ] && printf '%s' "$rss" || printf 'null'
