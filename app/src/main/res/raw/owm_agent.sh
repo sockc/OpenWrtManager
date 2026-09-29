@@ -104,6 +104,30 @@ state_rank() {
     esac
 }
 
+
+neigh_ip() {
+    printf '%s\n' "$1" | awk '{print $1}'
+}
+
+neigh_dev() {
+    printf '%s\n' "$1" | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}'
+}
+
+neigh_mac() {
+    printf '%s\n' "$1" | awk '{for(i=1;i<=NF;i++) if($i=="lladdr"){print $(i+1); exit}}'
+}
+
+neigh_state() {
+    printf '%s\n' "$1" | awk '{
+        for(i=1;i<=NF;i++) {
+            if($i ~ /^(REACHABLE|STALE|DELAY|PROBE|FAILED|NOARP|PERMANENT|INCOMPLETE)$/) {
+                print $i
+                exit
+            }
+        }
+    }'
+}
+
 cmd_devices() {
     tmp="/tmp/owm-neigh.$$"
     alltmp="/tmp/owm-neigh-all.$$"
@@ -113,8 +137,10 @@ cmd_devices() {
     seen=" "
     printf '['
     while IFS= read -r line; do
-        set -- $line
-        ip="${1:-}"; ifname="${3:-}"; mac="${5:-}"; state="${6:-}"
+        ip="$(neigh_ip "$line")"
+        ifname="$(neigh_dev "$line")"
+        mac="$(neigh_mac "$line")"
+        state="$(neigh_state "$line")"
         valid_mac "$mac" || continue
         mac_upper="$(echo "$mac" | tr a-f A-F)"
         case "$seen" in *" $mac_upper "*) continue ;; esac
@@ -123,14 +149,16 @@ cmd_devices() {
         case "$ip" in *:*) ;; *) best_rank=$((best_rank + 5)) ;; esac
         while IFS= read -r other; do
             echo "$other" | grep -qi "lladdr $mac " || continue
-            set -- $other
-            candidate_ip="${1:-}"
-            r="$(state_rank "${6:-}")"
+            candidate_ip="$(neigh_ip "$other")"
+            candidate_state="$(neigh_state "$other")"
+            r="$(state_rank "$candidate_state")"
             case "$candidate_ip" in *:*) ;; *) r=$((r + 5)) ;; esac
             if [ "$r" -gt "$best_rank" ]; then best="$other"; best_rank="$r"; fi
         done < "$tmp"
-        set -- $best
-        ip="${1:-}"; ifname="${3:-}"; mac="${5:-}"; state="${6:-}"
+        ip="$(neigh_ip "$best")"
+        ifname="$(neigh_dev "$best")"
+        mac="$(neigh_mac "$best")"
+        state="$(neigh_state "$best")"
         seen="$seen$mac_upper "
 
         hostname="$(awk -v m="$mac" 'tolower($2)==tolower(m){print $4; exit}' /tmp/dhcp.leases 2>/dev/null)"
@@ -164,8 +192,7 @@ cmd_devices() {
         addr_seen=" "
         while IFS= read -r other; do
             echo "$other" | grep -qi "lladdr $mac " || continue
-            set -- $other
-            addr="${1:-}"
+            addr="$(neigh_ip "$other")"
             [ -n "$addr" ] || continue
             case "$addr_seen" in *" $addr "*) continue ;; esac
             addr_seen="$addr_seen$addr "
