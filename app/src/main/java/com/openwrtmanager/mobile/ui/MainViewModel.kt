@@ -80,6 +80,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     val packages: StateFlow<List<PackageInfo>> = _packages.asStateFlow()
     private val _packageMessage = MutableStateFlow("")
     val packageMessage: StateFlow<String> = _packageMessage.asStateFlow()
+    private val _packageManagerRequest = MutableStateFlow<String?>(null)
+    val packageManagerRequest: StateFlow<String?> = _packageManagerRequest.asStateFlow()
     private val _backupMessage = MutableStateFlow("")
     val backupMessage: StateFlow<String> = _backupMessage.asStateFlow()
 
@@ -556,6 +558,15 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+
+    fun openPackageManagerFor(packageName: String) {
+        val safe = packageName.trim()
+        if (safe.isNotBlank()) _packageManagerRequest.value = safe
+    }
+
+    fun consumePackageManagerRequest() {
+        _packageManagerRequest.value = null
+    }
 
     fun refreshPackageStatus() = viewModelScope.launch {
         task { _packageStatus.value = agent.packageStatus() }
