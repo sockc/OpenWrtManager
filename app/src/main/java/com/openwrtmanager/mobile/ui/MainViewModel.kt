@@ -48,6 +48,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     private val _traffic = MutableStateFlow(TrafficSnapshot())
     val traffic: StateFlow<TrafficSnapshot> = _traffic.asStateFlow()
+    private val _wanRxHistory = MutableStateFlow<List<Long>>(emptyList())
+    val wanRxHistory: StateFlow<List<Long>> = _wanRxHistory.asStateFlow()
+    private val _wanTxHistory = MutableStateFlow<List<Long>>(emptyList())
+    val wanTxHistory: StateFlow<List<Long>> = _wanTxHistory.asStateFlow()
     private val _diagnostics = MutableStateFlow(DiagnosticSummary())
     val diagnostics: StateFlow<DiagnosticSummary> = _diagnostics.asStateFlow()
     private val _health = MutableStateFlow<List<HealthItem>>(emptyList())
@@ -122,6 +126,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         _safeApply.value = SafeApplyState()
         stopRealtimeMonitoring()
         _traffic.value = TrafficSnapshot()
+        _wanRxHistory.value = emptyList()
+        _wanTxHistory.value = emptyList()
         _diagnostics.value = DiagnosticSummary()
         _health.value = emptyList()
         previousTraffic = null
@@ -191,6 +197,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
         val rated = current.copy(wanRxBps = rxBps, wanTxBps = txBps)
         previousTraffic = current
         _traffic.value = rated
+        _wanRxHistory.value = (_wanRxHistory.value + rxBps).takeLast(20)
+        _wanTxHistory.value = (_wanTxHistory.value + txBps).takeLast(20)
     }
 
     fun runDiagnostics() = viewModelScope.launch {
