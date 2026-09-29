@@ -28,9 +28,11 @@ decode_b64() {
 
 cmd_install() {
     mkdir -p "$BASE" "$SAFE"
-    touch "$ALIASES" "$SCHEDULES"
+    touch "$ALIASES" "$SCHEDULES" /etc/sysupgrade.conf
+    grep -qxF '/etc/openwrt-manager/' /etc/sysupgrade.conf 2>/dev/null || echo '/etc/openwrt-manager/' >> /etc/sysupgrade.conf
     if [ "$0" != "$SELF" ]; then cp "$0" "$SELF"; fi
     chmod 700 "$SELF"
+    regen_cron >/dev/null 2>&1 || true
     printf '{"ok":true,"version":"%s"}\n' "$VERSION"
 }
 
